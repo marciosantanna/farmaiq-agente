@@ -1,0 +1,448 @@
+"""
+Agent Gerencial - Sincronizador local
+
+Le dados do Farmasoft (Firebird, READ-ONLY) e envia
+para a API na nuvem (Render).
+
+Uso:
+    python agent_gerencial.py             # sync unico
+    python agent_gerencial.py --loop      # loop continuo (15min)
+    python agent_gerencial.py --dias 180  # quantos dias de vendas enviar
+    python agent_gerencial.py --webhook   # servidor HTTP para trigger remoto (porta 5001)
+"""
+import os
+import sys
+import json
+import time
+import logging
+import argparse
+import threading
+import requests
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from datetime import date, timedelta, datetime
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Pasta desta instalacao standalone (agente_local/)
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
+
+# Adicionar esta pasta ao path (backend/ esta aqui dentro)
+sys.path.insert(0, str(BASE_DIR))
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [AGENT] %(levelname)s %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(Path(__file__).parent / "agent.log", encoding="utf-8"),
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# ── Configuracoes via .env ─────────────────────────────────────────────────
+CLOUD_URL   = os.getenv("CLOUD_API_URL", "")       # ex: https://gerencial.onrender.com
+AGENT_KEY   = os.getenv("AGENT_API_KEY", "")       # chave secreta compartilhada
+FILIAL_ID   = int(os.getenv("FILIAL_ID", "1"))
+VERSAO      = "1.0.0"
+TIMEOUT_HTTP = 180  # segundos por requisicao HTTP
+INTERVALO   = int(os.getenv("AGENT_INTERVALO_MIN", "15")) * 60  # segundos
+
+
+def headers():
+    return {
+        "X-Agent-Key": AGENT_KEY,
+        "Content-Type": "application/json",
+    }
+
+
+def post(endpoint: str, payload: dict) -> bool:
+    url = f"{CLOUD_URL.rstrip('/')}{endpoint}"
+    payload["agent_key"] = AGENT_KEY
+    try:
+        r = requests.post(url, json=payload, headers=headers(), timeout=TIMEOUT_HTTP)
+        if r.status_code == 200:
+            return True
+        logger.error(f"POST {endpoint} retornou {r.status_code}: {r.text[:200]}")
+        return False
+    except Exception as e:
+        logger.error(f"Erro HTTP {endpoint}: {e}")
+        return False
+
+
+def conectar_farmasoft():
+    from backend.utils.database import farmasoft_connection
+    return farmasoft_connection
+
+
+def sincronizar(dias_vendas: int = 180):
+    logger.info(f"Iniciando sync | filial={FILIAL_ID} | dias={dias_vendas}")
+
+    if not CLOUD_URL:
+        logger.error("CLOUD_API_URL nao configurado no .env")
+        return False
+
+    if not AGENT_KEY:
+        logger.error("AGENT_API_KEY nao configurado no .env")
+        return False
+
+    try:
+        from backend.utils.database import farmasoft_connection
+        from backend.etl.farmasoft_reader import FarmasoftReader
+    except ImportError as e:
+        logger.error(f"Erro ao importar backend: {e}")
+        return False
+
+    hoje = date.today()
+    data_inicio_vendas = hoje - timedelta(days=dias_vendas)
+    data_inicio_compras = hoje - timedelta(days=90)
+    data_inicio_30d = hoje - timedelta(days=30)
+
+    # Notificar cloud que sync iniciou
+    post("/api/sync/status", {
+        "filial_id": FILIAL_ID,
+        "em_curso": True,
+        "versao_agent": VERSAO,
+    })
+
+    erros = 0
+
+    try:
+        with farmasoft_connection() as conn:
+            reader = FarmasoftReader(conn)
+
+            # ── 1. PRODUTOS (estoque atual + info) ──────────────────────────
+            logger.info("Lendo estoque e produtos...")
+            try:
+                from backend.config import settings
+                estoque_rows = reader.ler_estoque_produtos(
+                    filial_id=FILIAL_ID,
+                    apenas_ativos=True,
+                )
+                produtos = []
+                for p in estoque_rows:
+                    produtos.append({
+                        "id_produto":      p.get("id_produto") or p.get("ID_PRODUTO"),
+                        "cd_produto":      str(p.get("cd_produto") or p.get("CD_PRODUTO") or ""),
+                        "descricao":       str(p.get("descricao") or p.get("DESCRICAO") or ""),
+                        "principio_ativo": str(p.get("principio_ativo") or p.get("PRINCIPIOATIVO") or ""),
+                        "laboratorio":     str(p.get("laboratorio") or p.get("LABORATORIO") or ""),
+                        "cd_laboratorio":  int(p.get("cd_laboratorio") or p.get("CD_LABORATORIO") or 0),
+                        "cd_grupo":        int(p.get("cd_grupo") or p.get("CD_GRUPO") or 0),
+                        "cd_classe":       int(p.get("cd_classe") or p.get("CD_CLASSE") or 0),
+                        "estoque_atual":   float(p.get("estoque") or p.get("ESTOQUE") or 0),
+                        "custo_unitario":  float(p.get("custo_unitario") or p.get("CUSTO_UNITARIO") or 0),
+                        "preco_venda":     float(p.get("preco_venda") or p.get("PRECO_VENDA") or 0),
+                    })
+                LOTE_P = 500
+                ok_prod = True
+                for i in range(0, len(produtos), LOTE_P):
+                    if not post("/api/sync/produtos", {"filial_id": FILIAL_ID, "produtos": produtos[i:i+LOTE_P]}):
+                        ok_prod = False
+                        erros += 1
+                if ok_prod:
+                    logger.info(f"Produtos enviados: {len(produtos)}")
+            except Exception as e:
+                logger.error(f"Erro ao ler produtos: {e}")
+                erros += 1
+
+            # ── 2. VENDAS (ultimos N dias, por produto por dia) ─────────────
+            logger.info(f"Lendo vendas desde {data_inicio_vendas}...")
+            try:
+                vendas_raw = reader.ler_vendas_por_produto_dia(
+                    data_inicio=data_inicio_vendas,
+                    data_fim=hoje,
+                    filial_id=FILIAL_ID,
+                )
+                vendas = []
+                for v in vendas_raw:
+                    d = v.get("data_venda") or v.get("DATA_VENDA")
+                    vendas.append({
+                        "data_venda":      str(d)[:10] if d else None,
+                        "id_produto":      int(v.get("id_produto") or v.get("ID_PRODUTO") or 0),
+                        "cd_produto":      str(v.get("cd_produto") or v.get("CD_PRODUTO") or ""),
+                        "descricao":       str(v.get("descricao") or v.get("DESCRICAO") or ""),
+                        "cd_grupo":        int(v.get("cd_grupo") or v.get("CD_GRUPO") or 0),
+                        "cd_classe":       int(v.get("cd_classe") or v.get("CD_CLASSE") or 0),
+                        "cd_balconista":   int(v.get("cd_balconista") or v.get("CD_BALCONISTA") or 0),
+                        "nome_balconista": str(v.get("nome_balconista") or v.get("NOME_BALCONISTA") or ""),
+                        "quantidade":      float(v.get("quantidade") or v.get("QUANTIDADE") or 0),
+                        "valor_total":     float(v.get("valor_total") or v.get("VALOR_TOTAL") or 0),
+                        "custo_total":     float(v.get("custo_total") or v.get("CUSTO_TOTAL") or 0),
+                    })
+                # Enviar em lotes de 200 para nao estourar o HTTP
+                LOTE = 200
+                for i in range(0, len(vendas), LOTE):
+                    lote = vendas[i:i+LOTE]
+                    if not post("/api/sync/vendas", {
+                        "filial_id": FILIAL_ID,
+                        "data_inicio": str(data_inicio_vendas),
+                        "lote": i // LOTE,
+                        "total_lotes": (len(vendas) + LOTE - 1) // LOTE,
+                        "vendas": lote,
+                    }):
+                        erros += 1
+                logger.info(f"Vendas enviadas: {len(vendas)}")
+            except Exception as e:
+                logger.error(f"Erro ao ler vendas: {e}")
+                erros += 1
+
+            # ── 3. BALCONISTAS (agregados diarios com contagem de transacoes) ─
+            logger.info("Lendo balconistas dia...")
+            try:
+                balc_raw = reader.ler_balconistas_dia(
+                    data_inicio=data_inicio_vendas,
+                    data_fim=hoje,
+                    filial_id=FILIAL_ID,
+                )
+                balconistas = []
+                for b in balc_raw:
+                    d = b.get("DATA_VENDA") or b.get("data_venda")
+                    balconistas.append({
+                        "data_venda":       str(d)[:10] if d else None,
+                        "cd_balconista":    int(b.get("CD_BALCONISTA") or b.get("cd_balconista") or 0),
+                        "nome_balconista":  str(b.get("NOME_BALCONISTA") or b.get("nome_balconista") or ""),
+                        "qtd_transacoes":   int(b.get("QTD_TRANSACOES") or b.get("qtd_transacoes") or 0),
+                        "qtd_itens":        int(b.get("QTD_ITENS") or b.get("qtd_itens") or 0),
+                        "valor_total":      float(b.get("VALOR_TOTAL") or b.get("valor_total") or 0),
+                        "custo_total":      float(b.get("CUSTO_TOTAL") or b.get("custo_total") or 0),
+                        "comissao":         float(b.get("COMISSAO_DIA") or b.get("comissao_dia") or b.get("comissao") or 0),
+                    })
+                LOTE_B = 500
+                for i in range(0, len(balconistas), LOTE_B):
+                    if not post("/api/sync/balconistas", {
+                        "filial_id": FILIAL_ID,
+                        "data_inicio": str(data_inicio_vendas),
+                        "lote": i // LOTE_B,
+                        "balconistas": balconistas[i:i+LOTE_B],
+                    }):
+                        erros += 1
+                logger.info(f"Balconistas enviados: {len(balconistas)}")
+            except Exception as e:
+                logger.error(f"Erro ao ler balconistas: {e}")
+                erros += 1
+
+            # ── 4. COMPRAS (ultimos 90 dias) ────────────────────────────────
+            logger.info("Lendo compras...")
+            try:
+                compras_raw = reader.ler_compras_por_nota(
+                    data_inicio=data_inicio_compras,
+                    data_fim=hoje,
+                    filial_id=FILIAL_ID,
+                )
+                compras = []
+                for c in compras_raw:
+                    d = c.get("data_compra") or c.get("DATA_NF")
+                    compras.append({
+                        "data_compra": str(d)[:10] if d else None,
+                        "numero_nf":   str(c.get("numero_nf") or c.get("NOTA_FISCAL") or ""),
+                        "cd_classe":   int(c.get("cd_classe") or c.get("CD_CLASSE") or 0),
+                        "cd_grupo":    int(c.get("cd_grupo") or c.get("CD_GRUPO") or 0),
+                        "valor_total": float(c.get("valor_total") or c.get("VALOR_TOTAL") or 0),
+                    })
+                if not post("/api/sync/compras", {"filial_id": FILIAL_ID, "compras": compras}):
+                    erros += 1
+                else:
+                    logger.info(f"Compras enviadas: {len(compras)}")
+            except Exception as e:
+                logger.error(f"Erro ao ler compras: {e}")
+                erros += 1
+
+            # ── 4. TRANSFERENCIAS (ultimos 30 dias) ─────────────────────────
+            logger.info("Lendo transferencias...")
+            try:
+                transf_raw = reader.ler_transferencias(
+                    data_inicio=data_inicio_30d,
+                    data_fim=hoje,
+                    filial_id=FILIAL_ID,
+                )
+                transf = []
+                for t in transf_raw:
+                    d = t.get("data_geracao") or t.get("DATA_GERACAO")
+                    transf.append({
+                        "cd_transfer":          int(t.get("cd_transfer") or 0),
+                        "data_transfer":        str(d)[:10] if d else None,
+                        "id_produto":           int(t.get("id_produto") or 0),
+                        "descricao":            str(t.get("descricao") or ""),
+                        "filial_origem":        int(t.get("filial_origem") or 0),
+                        "nome_filial_origem":   str(t.get("nome_filial_origem") or ""),
+                        "filial_destino":       int(t.get("filial_destino") or 0),
+                        "nome_filial_destino":  str(t.get("nome_filial_destino") or ""),
+                        "quantidade":           float(t.get("qtd_enviada") or t.get("qtd_solicitada") or 0),
+                        "valor":                float(t.get("valor") or 0),
+                        "sentido":              str(t.get("sentido") or ""),
+                        "status_transfer":      str(t.get("status_transfer") or ""),
+                    })
+                if not post("/api/sync/transferencias", {"filial_id": FILIAL_ID, "transferencias": transf}):
+                    erros += 1
+                else:
+                    logger.info(f"Transferencias enviadas: {len(transf)}")
+            except Exception as e:
+                logger.error(f"Erro ao ler transferencias: {e}")
+                erros += 1
+
+            # ── 5. RECEBIMENTOS (ultimos 30 dias) ───────────────────────────
+            logger.info("Lendo recebimentos...")
+            try:
+                receb_raw = reader.ler_recebimentos_periodo(
+                    data_inicio=data_inicio_30d,
+                    data_fim=hoje,
+                    filial_id=FILIAL_ID,
+                )
+                receb = []
+                for r in receb_raw:
+                    d = r.data_emissao
+                    receb.append({
+                        "cd_compras":      int(r.cd_compras or 0),
+                        "numero_nf":       str(r.numero_nf or ""),
+                        "data_emissao":    str(d)[:10] if d else None,
+                        "id_produto":      int(r.id_produto or 0),
+                        "descricao":       str(r.descricao or ""),
+                        "laboratorio":     str(r.laboratorio or ""),
+                        "principio_ativo": str(r.principio_ativo or ""),
+                        "quantidade":      int(r.quantidade or 0),
+                        "valor_total":     float(r.valor_total or 0),
+                        "fornecedor":      str(r.fornecedor or ""),
+                    })
+                if not post("/api/sync/recebimentos", {"filial_id": FILIAL_ID, "recebimentos": receb}):
+                    erros += 1
+                else:
+                    logger.info(f"Recebimentos enviados: {len(receb)}")
+            except Exception as e:
+                logger.error(f"Erro ao ler recebimentos: {e}")
+                erros += 1
+
+    except Exception as e:
+        logger.error(f"Erro de conexao Farmasoft: {e}")
+        post("/api/sync/status", {
+            "filial_id": FILIAL_ID,
+            "em_curso": False,
+            "erro": str(e),
+            "versao_agent": VERSAO,
+        })
+        return False
+
+    # Notificar cloud que sync concluiu
+    post("/api/sync/status", {
+        "filial_id": FILIAL_ID,
+        "em_curso": False,
+        "erro": f"{erros} erros" if erros else None,
+        "versao_agent": VERSAO,
+    })
+
+    logger.info(f"Sync concluido | erros={erros}")
+
+    # Verificar se meta bonus do dia foi batida (envia alerta uma vez por dia)
+    try:
+        url = f"{CLOUD_URL.rstrip('/')}/api/telegram/verificar-alerta-bonus?filial_id={FILIAL_ID}"
+        r = requests.post(url, headers=headers(), timeout=30)
+        if r.status_code == 200:
+            status = r.json().get("status", "")
+            if status == "alerta_enviado":
+                logger.info("Alerta de meta bonus enviado ao gerente")
+            else:
+                logger.info(f"Verificacao bonus: {status}")
+    except Exception as e:
+        logger.warning(f"Erro ao verificar alerta bonus: {e}")
+
+    return erros == 0
+
+
+WEBHOOK_PORT = int(os.getenv("AGENT_WEBHOOK_PORT", "5001"))
+
+# flag para evitar sync simultaneo
+_sync_lock = threading.Lock()
+
+
+def _fazer_sync_thread(dias):
+    """Executa sync em thread separada (nao bloqueia o webhook)."""
+    if _sync_lock.locked():
+        logger.info("Sync ja em curso, ignorando trigger")
+        return
+    with _sync_lock:
+        sincronizar(dias_vendas=dias)
+
+
+class WebhookHandler(BaseHTTPRequestHandler):
+    """Handler HTTP minimo para trigger de sync via DuckDNS."""
+
+    dias_vendas = 180
+
+    def do_GET(self):
+        if self.path == "/health":
+            self._responder(200, "ok")
+        else:
+            self._responder(404, "Not found")
+
+    def do_POST(self):
+        if self.path != "/sync":
+            self._responder(404, "Not found")
+            return
+
+        # Verificar chave na query string: /sync?key=AGENT_KEY
+        from urllib.parse import urlparse, parse_qs
+        qs = parse_qs(urlparse(self.path).query)
+        chave = qs.get("key", [""])[0]
+        if chave != AGENT_KEY:
+            self._responder(401, "Chave invalida")
+            return
+
+        threading.Thread(
+            target=_fazer_sync_thread,
+            args=(self.dias_vendas,),
+            daemon=True
+        ).start()
+        self._responder(200, "Sync iniciado")
+
+    def _responder(self, codigo, msg):
+        body = msg.encode()
+        self.send_response(codigo)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, fmt, *args):
+        logger.info("Webhook: " + fmt % args)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Agent Gerencial - Sync Farmasoft -> Cloud")
+    parser.add_argument("--loop",    action="store_true", help="Rodar em loop continuo")
+    parser.add_argument("--webhook", action="store_true", help="Servidor HTTP para trigger remoto")
+    parser.add_argument("--dias",    type=int, default=30, help="Dias de vendas a sincronizar (default 30; use 180 na primeira carga)")
+    args = parser.parse_args()
+
+    if args.webhook:
+        WebhookHandler.dias_vendas = args.dias
+        logger.info(f"Webhook ativo na porta {WEBHOOK_PORT} | POST /sync?key=***")
+        # Loop automatico em background
+        threading.Thread(target=_loop_background, args=(args.dias,), daemon=True).start()
+        server = HTTPServer(("0.0.0.0", WEBHOOK_PORT), WebhookHandler)
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            logger.info("Agent encerrado pelo usuario")
+            server.shutdown()
+
+    elif args.loop:
+        logger.info(f"Modo loop: sincronizando a cada {INTERVALO//60} minutos")
+        while True:
+            sincronizar(dias_vendas=args.dias)
+            logger.info(f"Aguardando {INTERVALO//60} minutos...")
+            time.sleep(INTERVALO)
+    else:
+        ok = sincronizar(dias_vendas=args.dias)
+        sys.exit(0 if ok else 1)
+
+
+def _loop_background(dias):
+    """Loop de sync automatico rodando em background junto com o webhook."""
+    while True:
+        _fazer_sync_thread(dias)
+        logger.info(f"Proximo sync automatico em {INTERVALO//60} minutos")
+        time.sleep(INTERVALO)
+
+
+if __name__ == "__main__":
+    main()

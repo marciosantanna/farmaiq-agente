@@ -1,0 +1,32 @@
+AGENT GERENCIAL - Pasta Standalone
+====================================
+
+Esta pasta contem TUDO que o agent precisa para funcionar.
+Pode ser copiada para qualquer PC que tenha acesso ao Farmasoft.
+
+ESTRUTURA:
+  agent_gerencial.py     - programa principal
+  .env                   - suas configuracoes (criar a partir do .env.exemplo)
+  .env.exemplo           - modelo do arquivo de configuracao
+  instalar.bat           - instala as dependencias (rodar uma vez)
+  iniciar.bat            - inicia o agent em loop continuo
+  iniciar_webhook.bat    - inicia com servidor para trigger remoto
+  requirements_agent.txt - lista de dependencias Python
+  backend/               - modulos necessarios (nao mexer)
+
+PRIMEIRA VEZ:
+  1. Copie .env.exemplo para .env
+  2. Edite o .env com os dados do Farmasoft e da API
+  3. Clique em instalar.bat (uma vez so)
+  4. Clique em iniciar.bat
+
+DEPOIS:
+  - Apenas clique em iniciar.bat
+  - O agent sincroniza automaticamente a cada 15 minutos
+  - O log fica em agent.log nesta mesma pasta
+
+IMPORTANTE:
+  - Esta pasta deve ficar NO PC DA FARMACIA (que acessa o Farmasoft)
+  - O .env contem senhas - nao compartilhe este arquivo
+  - Nao e necessario copiar esta pasta no pendrive
+  - O projeto principal (desenvolvimento) e separado desta pasta
