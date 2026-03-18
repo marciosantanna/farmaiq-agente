@@ -48,6 +48,39 @@ VERSAO      = "1.0.0"
 TIMEOUT_HTTP = 180  # segundos por requisicao HTTP
 INTERVALO   = int(os.getenv("AGENT_INTERVALO_MIN", "15")) * 60  # segundos
 
+STATE_FILE  = Path(__file__).resolve().parent / "sync_state.json"
+DIAS_PRIMEIRA_CARGA = 180
+DIAS_MAX_INCREMENTAL = 5   # maximo de dias no sync incremental
+DIAS_MARGEM = 2            # margem de seguranca (reprocessa N dias atras)
+
+
+def calcular_dias_sync() -> int:
+    """
+    Retorna quantos dias sincronizar:
+    - Sem historico local: 180 dias (carga completa)
+    - Com historico: dias desde ultimo sync + margem (minimo 2, maximo 5)
+    """
+    try:
+        if STATE_FILE.exists():
+            state = json.loads(STATE_FILE.read_text())
+            ultimo = datetime.fromisoformat(state.get("ultimo_sync", ""))
+            dias_passados = (datetime.now() - ultimo).days + DIAS_MARGEM
+            dias = max(DIAS_MARGEM, min(dias_passados, DIAS_MAX_INCREMENTAL))
+            logger.info(f"Sync incremental: {dias} dias (ultimo sync: {ultimo.strftime('%d/%m %H:%M')})")
+            return dias
+    except Exception:
+        pass
+    logger.info(f"Primeiro sync ou estado invalido: carregando {DIAS_PRIMEIRA_CARGA} dias")
+    return DIAS_PRIMEIRA_CARGA
+
+
+def salvar_estado_sync():
+    """Grava timestamp do sync bem-sucedido para uso na proxima execucao."""
+    try:
+        STATE_FILE.write_text(json.dumps({"ultimo_sync": datetime.now().isoformat()}))
+    except Exception as e:
+        logger.warning(f"Nao foi possivel salvar sync_state.json: {e}")
+
 
 def headers():
     return {
@@ -332,6 +365,9 @@ def sincronizar(dias_vendas: int = 180):
 
     logger.info(f"Sync concluido | erros={erros}")
 
+    if erros == 0:
+        salvar_estado_sync()
+
     # Verificar se meta bonus do dia foi batida (envia alerta uma vez por dia)
     try:
         url = f"{CLOUD_URL.rstrip('/')}/api/telegram/verificar-alerta-bonus?filial_id={FILIAL_ID}"
@@ -410,13 +446,19 @@ def main():
     parser = argparse.ArgumentParser(description="Agent Gerencial - Sync Farmasoft -> Cloud")
     parser.add_argument("--loop",    action="store_true", help="Rodar em loop continuo")
     parser.add_argument("--webhook", action="store_true", help="Servidor HTTP para trigger remoto")
-    parser.add_argument("--dias",    type=int, default=30, help="Dias de vendas a sincronizar (default 30; use 180 na primeira carga)")
+    parser.add_argument("--dias",    type=int, default=None, help="Forcar N dias (ignora calculo automatico)")
+    parser.add_argument("--reset",   action="store_true", help="Apagar historico local e fazer carga completa (180 dias)")
     args = parser.parse_args()
 
+    if args.reset:
+        if STATE_FILE.exists():
+            STATE_FILE.unlink()
+        logger.info("Historico de sync apagado. Proxima execucao fara carga completa.")
+        if not args.loop and not args.webhook:
+            sys.exit(0)
+
     if args.webhook:
-        WebhookHandler.dias_vendas = args.dias
         logger.info(f"Webhook ativo na porta {WEBHOOK_PORT} | POST /sync?key=***")
-        # Loop automatico em background
         threading.Thread(target=_loop_background, args=(args.dias,), daemon=True).start()
         server = HTTPServer(("0.0.0.0", WEBHOOK_PORT), WebhookHandler)
         try:
@@ -428,17 +470,20 @@ def main():
     elif args.loop:
         logger.info(f"Modo loop: sincronizando a cada {INTERVALO//60} minutos")
         while True:
-            sincronizar(dias_vendas=args.dias)
+            dias = args.dias if args.dias else calcular_dias_sync()
+            sincronizar(dias_vendas=dias)
             logger.info(f"Aguardando {INTERVALO//60} minutos...")
             time.sleep(INTERVALO)
     else:
-        ok = sincronizar(dias_vendas=args.dias)
+        dias = args.dias if args.dias else calcular_dias_sync()
+        ok = sincronizar(dias_vendas=dias)
         sys.exit(0 if ok else 1)
 
 
-def _loop_background(dias):
+def _loop_background(dias_fixo):
     """Loop de sync automatico rodando em background junto com o webhook."""
     while True:
+        dias = dias_fixo if dias_fixo else calcular_dias_sync()
         _fazer_sync_thread(dias)
         logger.info(f"Proximo sync automatico em {INTERVALO//60} minutos")
         time.sleep(INTERVALO)

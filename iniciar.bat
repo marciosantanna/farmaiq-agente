@@ -1,6 +1,8 @@
 @echo off
-echo Iniciando Agent Gerencial (loop automatico a cada 15 min)...
+echo Iniciando Agent Gerencial (sync inteligente automatico)...
+echo - Primeira execucao: carrega 180 dias
+echo - Proximas execucoes: apenas dados novos (incremental)
 echo Para encerrar pressione CTRL+C
 echo.
-python agent_gerencial.py --loop --dias 30
+python agent_gerencial.py --loop
 pause
