@@ -8,7 +8,12 @@ Uso:
     python agent_gerencial.py             # sync unico
     python agent_gerencial.py --loop      # loop continuo (15min)
     python agent_gerencial.py --dias 180  # quantos dias de vendas enviar
-    python agent_gerencial.py --webhook   # servidor HTTP para trigger remoto (porta 5001)
+    python agent_gerencial.py --webhook   # servidor HTTP para trigger remoto + busca (porta 5001)
+
+Endpoints do webhook:
+    GET  /health              - status do agent
+    POST /sync?key=CHAVE      - dispara sync manual
+    GET  /buscar?termo=X&key=CHAVE  - busca produto em tempo real no Farmasoft
 """
 import os
 import sys
@@ -21,6 +26,7 @@ import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import date, timedelta, datetime
 from pathlib import Path
+from urllib.parse import urlparse, parse_qs
 from dotenv import load_dotenv
 
 # Pasta desta instalacao standalone (agente_local/)
@@ -399,25 +405,106 @@ def _fazer_sync_thread(dias):
         sincronizar(dias_vendas=dias)
 
 
+def _buscar_produtos_farmasoft(termo: str) -> list:
+    """
+    Busca produtos no Farmasoft pelo termo (DESCRICAO, PRINCIPIOATIVO ou CD_PRODUTO).
+    Retorna lista de dicts. Chamada direta ao Firebird, apenas leitura.
+    """
+    from backend.utils.database import FarmasoftConnection
+
+    estoque_campo = f"ESTOQUE_{FILIAL_ID}" if FILIAL_ID <= 30 else "ESTOQUE_1"
+    custo_campo   = f"CUSTO_UNITARIO_{FILIAL_ID}" if FILIAL_ID <= 30 else "CUSTO_UNITARIO"
+    termo_upper   = termo.upper().strip().replace("'", "''")  # escape basico
+
+    query = f"""
+        SELECT FIRST 40
+            p.ID_PRODUTO,
+            p.CD_PRODUTO,
+            p.DESCRICAO,
+            COALESCE(p.PRINCIPIOATIVO, '') as PRINCIPIO_ATIVO,
+            COALESCE(l.NOME, '') as LABORATORIO,
+            COALESCE(p.{estoque_campo}, 0) as ESTOQUE,
+            COALESCE(p.{custo_campo}, p.CUSTO_UNITARIO, p.CUSTO_MEDIO, 0) as CUSTO_UNITARIO,
+            COALESCE(p.PRECO_VENDA, 0) as PRECO_VENDA
+        FROM PRODUTOS p
+        LEFT JOIN LABORATORIOS l ON p.CD_LABORATORIO = l.CD_LABORATORIO
+        WHERE p.STATUS = 'A'
+          AND (
+            UPPER(p.DESCRICAO) CONTAINING '{termo_upper}'
+            OR UPPER(COALESCE(p.PRINCIPIOATIVO,'')) CONTAINING '{termo_upper}'
+            OR UPPER(COALESCE(p.CD_PRODUTO,'')) CONTAINING '{termo_upper}'
+          )
+        ORDER BY p.DESCRICAO
+    """
+
+    conn = FarmasoftConnection()  # usa settings.farmasoft do .env
+    if not conn.conectar():
+        raise RuntimeError("Nao foi possivel conectar ao Farmasoft")
+    try:
+        rows = conn.executar_select(query)
+        return [
+            {
+                "id_produto":      int(r.get("ID_PRODUTO") or 0),
+                "cd_produto":      str(r.get("CD_PRODUTO") or ""),
+                "descricao":       str(r.get("DESCRICAO") or ""),
+                "principio_ativo": str(r.get("PRINCIPIO_ATIVO") or ""),
+                "laboratorio":     str(r.get("LABORATORIO") or ""),
+                "estoque_atual":   float(r.get("ESTOQUE") or 0),
+                "custo_unitario":  float(r.get("CUSTO_UNITARIO") or 0),
+                "preco_venda":     float(r.get("PRECO_VENDA") or 0),
+            }
+            for r in rows
+        ]
+    finally:
+        conn.desconectar()
+
+
 class WebhookHandler(BaseHTTPRequestHandler):
-    """Handler HTTP minimo para trigger de sync via DuckDNS."""
+    """Handler HTTP para trigger de sync e busca de produtos em tempo real."""
 
     dias_vendas = 180
 
     def do_GET(self):
-        if self.path == "/health":
+        parsed = urlparse(self.path)
+        qs     = parse_qs(parsed.query)
+        path   = parsed.path
+
+        if path == "/health":
             self._responder(200, "ok")
+
+        elif path == "/buscar":
+            # GET /buscar?termo=X&key=AGENT_KEY
+            chave = qs.get("key", [""])[0]
+            if chave != AGENT_KEY:
+                self._responder_json(401, {"erro": "Chave invalida"})
+                return
+            termo = qs.get("termo", [""])[0].strip()
+            if len(termo) < 2:
+                self._responder_json(400, {"erro": "Termo deve ter pelo menos 2 caracteres"})
+                return
+            try:
+                produtos = _buscar_produtos_farmasoft(termo)
+                self._responder_json(200, {
+                    "filial_id": FILIAL_ID,
+                    "fonte": "farmasoft_realtime",
+                    "total": len(produtos),
+                    "produtos": produtos,
+                })
+            except Exception as e:
+                logger.error(f"Erro buscar produtos: {e}")
+                self._responder_json(500, {"erro": str(e)})
+
         else:
             self._responder(404, "Not found")
 
     def do_POST(self):
-        if self.path != "/sync":
+        parsed = urlparse(self.path)
+        qs     = parse_qs(parsed.query)
+
+        if parsed.path != "/sync":
             self._responder(404, "Not found")
             return
 
-        # Verificar chave na query string: /sync?key=AGENT_KEY
-        from urllib.parse import urlparse, parse_qs
-        qs = parse_qs(urlparse(self.path).query)
         chave = qs.get("key", [""])[0]
         if chave != AGENT_KEY:
             self._responder(401, "Chave invalida")
@@ -434,6 +521,14 @@ class WebhookHandler(BaseHTTPRequestHandler):
         body = msg.encode()
         self.send_response(codigo)
         self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _responder_json(self, codigo, dados):
+        body = json.dumps(dados, ensure_ascii=False).encode("utf-8")
+        self.send_response(codigo)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
