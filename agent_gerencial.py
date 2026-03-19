@@ -567,6 +567,7 @@ def main():
         while True:
             dias = args.dias if args.dias else calcular_dias_sync()
             sincronizar(dias_vendas=dias)
+            _verificar_relatorio_agendado()
             logger.info(f"Aguardando {INTERVALO//60} minutos...")
             time.sleep(INTERVALO)
     else:
@@ -575,11 +576,45 @@ def main():
         sys.exit(0 if ok else 1)
 
 
+_relatorio_enviado_hoje: str = ""
+
+
+def _verificar_relatorio_agendado():
+    """Envia relatorio ao gerente se horario configurado foi atingido (uma vez por dia)."""
+    global _relatorio_enviado_hoje
+    hoje = date.today().isoformat()
+    if _relatorio_enviado_hoje == hoje:
+        return
+    try:
+        url = f"{CLOUD_URL.rstrip('/')}/api/loja/config?filial_id={FILIAL_ID}"
+        r = requests.get(url, headers=headers(), timeout=10)
+        if r.status_code != 200:
+            return
+        horario = r.json().get("horario_relatorio") or ""
+        if not horario:
+            return
+        agora = datetime.now().strftime("%H:%M")
+        h_conf = datetime.strptime(horario, "%H:%M")
+        h_agora = datetime.strptime(agora, "%H:%M")
+        delta = (h_agora - h_conf).total_seconds()
+        if 0 <= delta <= 900:
+            url2 = f"{CLOUD_URL.rstrip('/')}/api/telegram/enviar-relatorio-gerente?filial_id={FILIAL_ID}"
+            r2 = requests.post(url2, headers=headers(), timeout=30)
+            if r2.status_code == 200:
+                _relatorio_enviado_hoje = hoje
+                logger.info(f"Relatorio agendado enviado ({horario})")
+            else:
+                logger.warning(f"Erro ao enviar relatorio agendado: {r2.status_code}")
+    except Exception as e:
+        logger.warning(f"Erro verificar relatorio agendado: {e}")
+
+
 def _loop_background(dias_fixo):
     """Loop de sync automatico rodando em background junto com o webhook."""
     while True:
         dias = dias_fixo if dias_fixo else calcular_dias_sync()
         _fazer_sync_thread(dias)
+        _verificar_relatorio_agendado()
         logger.info(f"Proximo sync automatico em {INTERVALO//60} minutos")
         time.sleep(INTERVALO)
 
