@@ -47,12 +47,38 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ── Configuracoes via .env ─────────────────────────────────────────────────
-CLOUD_URL   = os.getenv("CLOUD_API_URL", "")       # ex: https://gerencial.onrender.com
-AGENT_KEY   = os.getenv("AGENT_API_KEY", "")       # chave secreta compartilhada
+CLOUD_URL   = os.getenv("CLOUD_API_URL", "")
+AGENT_KEY   = os.getenv("AGENT_API_KEY", "")
 FILIAL_ID   = int(os.getenv("FILIAL_ID", "1"))
 VERSAO      = "1.0.0"
-TIMEOUT_HTTP = 180  # segundos por requisicao HTTP
-INTERVALO   = int(os.getenv("AGENT_INTERVALO_MIN", "15")) * 60  # segundos
+TIMEOUT_HTTP = 180
+INTERVALO   = int(os.getenv("AGENT_INTERVALO_MIN", "15")) * 60
+
+DUCKDNS_DOMAIN   = os.getenv("DUCKDNS_DOMAIN", "")
+DUCKDNS_TOKEN    = os.getenv("DUCKDNS_TOKEN", "")
+DUCKDNS_INTERVALO = int(os.getenv("DUCKDNS_INTERVALO_MIN", "5")) * 60
+
+
+def _atualizar_duckdns():
+    """Atualiza IP publico no DuckDNS."""
+    if not DUCKDNS_DOMAIN or not DUCKDNS_TOKEN:
+        return
+    try:
+        url = f"https://www.duckdns.org/update?domains={DUCKDNS_DOMAIN}&token={DUCKDNS_TOKEN}&ip="
+        r = requests.get(url, timeout=10)
+        if r.text.strip() == "OK":
+            logger.info(f"DuckDNS atualizado: {DUCKDNS_DOMAIN}.duckdns.org")
+        else:
+            logger.warning(f"DuckDNS retornou: {r.text.strip()}")
+    except Exception as e:
+        logger.warning(f"Erro ao atualizar DuckDNS: {e}")
+
+
+def _loop_duckdns():
+    """Thread que atualiza DuckDNS periodicamente."""
+    while True:
+        _atualizar_duckdns()
+        time.sleep(DUCKDNS_INTERVALO)
 
 STATE_FILE  = Path(__file__).resolve().parent / "sync_state.json"
 DIAS_PRIMEIRA_CARGA = 180
@@ -620,6 +646,10 @@ def main():
     if args.webhook:
         logger.info(f"Webhook ativo na porta {WEBHOOK_PORT} | POST /sync?key=***")
         threading.Thread(target=_loop_background, args=(args.dias,), daemon=True).start()
+        if DUCKDNS_DOMAIN and DUCKDNS_TOKEN:
+            _atualizar_duckdns()
+            threading.Thread(target=_loop_duckdns, daemon=True).start()
+            logger.info(f"DuckDNS ativo: {DUCKDNS_DOMAIN}.duckdns.org a cada {DUCKDNS_INTERVALO//60} min")
         server = HTTPServer(("0.0.0.0", WEBHOOK_PORT), WebhookHandler)
         try:
             server.serve_forever()
