@@ -265,7 +265,7 @@ def sincronizar(dias_vendas: int = 180):
                         }
                         for r in rows
                     ]
-                    LOTE_E = 500
+                    LOTE_E = 5000  # unnest: 1 SQL por lote, pode enviar mais de uma vez
                     ok_est = True
                     _ping_api()  # acorda Render apos leitura do Farmasoft
                     for i in range(0, len(itens), LOTE_E):
