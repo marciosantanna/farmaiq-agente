@@ -95,18 +95,28 @@ def headers():
     }
 
 
-def post(endpoint: str, payload: dict) -> bool:
+def post(endpoint: str, payload: dict, tentativas: int = 3) -> bool:
     url = f"{CLOUD_URL.rstrip('/')}{endpoint}"
     payload["agent_key"] = AGENT_KEY
-    try:
-        r = requests.post(url, json=payload, headers=headers(), timeout=TIMEOUT_HTTP)
-        if r.status_code == 200:
-            return True
-        logger.error(f"POST {endpoint} retornou {r.status_code}: {r.text[:200]}")
-        return False
-    except Exception as e:
-        logger.error(f"Erro HTTP {endpoint}: {e}")
-        return False
+    for tentativa in range(1, tentativas + 1):
+        try:
+            r = requests.post(url, json=payload, headers=headers(), timeout=TIMEOUT_HTTP)
+            if r.status_code == 200:
+                return True
+            if r.status_code in (502, 503, 504) and tentativa < tentativas:
+                logger.warning(f"POST {endpoint} retornou {r.status_code} (tentativa {tentativa}/{tentativas}), aguardando 5s...")
+                time.sleep(5)
+                continue
+            logger.error(f"POST {endpoint} retornou {r.status_code}: {r.text[:200]}")
+            return False
+        except Exception as e:
+            if tentativa < tentativas:
+                logger.warning(f"Erro HTTP {endpoint} (tentativa {tentativa}/{tentativas}): {e}, aguardando 5s...")
+                time.sleep(5)
+                continue
+            logger.error(f"Erro HTTP {endpoint}: {e}")
+            return False
+    return False
 
 
 def conectar_farmasoft():
@@ -182,7 +192,7 @@ def sincronizar(dias_vendas: int = 180):
                         "custo_unitario":  float(p.get("custo_unitario") or p.get("CUSTO_UNITARIO") or 0),
                         "preco_venda":     float(p.get("preco_venda") or p.get("PRECO_VENDA") or 0),
                     })
-                LOTE_P = 500
+                LOTE_P = 200
                 ok_prod = True
                 for i in range(0, len(produtos), LOTE_P):
                     if not post("/api/sync/produtos", {"filial_id": FILIAL_ID, "produtos": produtos[i:i+LOTE_P]}):
