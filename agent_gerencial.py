@@ -114,8 +114,17 @@ def conectar_farmasoft():
     return farmasoft_connection
 
 
+def _ping_api():
+    """Acorda o banco (Neon serverless) antes da sync para evitar cold start nas queries."""
+    try:
+        requests.get(f"{CLOUD_URL.rstrip('/')}/health", timeout=15)
+    except Exception:
+        pass
+
+
 def sincronizar(dias_vendas: int = 180):
     logger.info(f"Iniciando sync | filial={FILIAL_ID} | dias={dias_vendas}")
+    _ping_api()
 
     if not CLOUD_URL:
         logger.error("CLOUD_API_URL nao configurado no .env")
@@ -596,7 +605,8 @@ def _verificar_relatorio_agendado():
         agora = datetime.now().strftime("%H:%M")
         h_conf = datetime.strptime(horario, "%H:%M")
         h_agora = datetime.strptime(agora, "%H:%M")
-        if h_agora >= h_conf:
+        delta = (h_agora - h_conf).total_seconds()
+        if 0 <= delta <= 900:
             url2 = f"{CLOUD_URL.rstrip('/')}/api/telegram/enviar-relatorio-gerente?filial_id={FILIAL_ID}"
             r2 = requests.post(url2, headers=headers(), timeout=30)
             if r2.status_code == 200:
