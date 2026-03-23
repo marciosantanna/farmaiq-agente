@@ -267,6 +267,7 @@ def sincronizar(dias_vendas: int = 180):
                     ]
                     LOTE_E = 500
                     ok_est = True
+                    _ping_api()  # acorda Render apos leitura do Farmasoft
                     for i in range(0, len(itens), LOTE_E):
                         if not post("/api/sync/estoque", {"filial_id": FILIAL_ID, "itens": itens[i:i+LOTE_E]}):
                             ok_est = False
