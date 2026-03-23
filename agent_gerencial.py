@@ -241,6 +241,7 @@ def sincronizar(dias_vendas: int = 180):
                         })
                     LOTE_P = 200
                     ok_prod = True
+                    _ping_api()  # acorda Render apos leitura longa do Farmasoft
                     for i in range(0, len(produtos), LOTE_P):
                         if not post("/api/sync/produtos", {"filial_id": FILIAL_ID, "produtos": produtos[i:i+LOTE_P]}):
                             ok_prod = False
