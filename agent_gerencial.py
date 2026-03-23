@@ -80,12 +80,34 @@ def calcular_dias_sync() -> int:
     return DIAS_PRIMEIRA_CARGA
 
 
-def salvar_estado_sync():
+def salvar_estado_sync(incluiu_produtos: bool = False):
     """Grava timestamp do sync bem-sucedido para uso na proxima execucao."""
     try:
-        STATE_FILE.write_text(json.dumps({"ultimo_sync": datetime.now().isoformat()}))
+        state = {}
+        if STATE_FILE.exists():
+            state = json.loads(STATE_FILE.read_text())
+        state["ultimo_sync"] = datetime.now().isoformat()
+        if incluiu_produtos:
+            state["ultimo_sync_produtos"] = datetime.now().isoformat()
+        STATE_FILE.write_text(json.dumps(state))
     except Exception as e:
         logger.warning(f"Nao foi possivel salvar sync_state.json: {e}")
+
+
+def deve_sincronizar_produtos() -> bool:
+    """Produtos (metadata completa) so sincronizam uma vez por dia."""
+    try:
+        if STATE_FILE.exists():
+            state = json.loads(STATE_FILE.read_text())
+            ultimo = state.get("ultimo_sync_produtos")
+            if ultimo:
+                horas = (datetime.now() - datetime.fromisoformat(ultimo)).total_seconds() / 3600
+                if horas < 6:
+                    logger.info(f"Metadata produtos em cache ({horas:.1f}h) - usando sync rapido de estoque")
+                    return False
+    except Exception:
+        pass
+    return True
 
 
 def headers():
@@ -164,45 +186,69 @@ def sincronizar(dias_vendas: int = 180):
     })
 
     erros = 0
+    sync_completo = False
 
     try:
         with farmasoft_connection() as conn:
             reader = FarmasoftReader(conn)
 
-            # ── 1. PRODUTOS (estoque atual + info) ──────────────────────────
-            logger.info("Lendo estoque e produtos...")
-            try:
-                from backend.config import settings
-                estoque_rows = reader.ler_estoque_produtos(
-                    filial_id=FILIAL_ID,
-                    apenas_ativos=True,
-                )
-                produtos = []
-                for p in estoque_rows:
-                    produtos.append({
-                        "id_produto":      p.get("id_produto") or p.get("ID_PRODUTO"),
-                        "cd_produto":      str(p.get("cd_produto") or p.get("CD_PRODUTO") or ""),
-                        "descricao":       str(p.get("descricao") or p.get("DESCRICAO") or ""),
-                        "principio_ativo": str(p.get("principio_ativo") or p.get("PRINCIPIOATIVO") or ""),
-                        "laboratorio":     str(p.get("laboratorio") or p.get("LABORATORIO") or ""),
-                        "cd_laboratorio":  int(p.get("cd_laboratorio") or p.get("CD_LABORATORIO") or 0),
-                        "cd_grupo":        int(p.get("cd_grupo") or p.get("CD_GRUPO") or 0),
-                        "cd_classe":       int(p.get("cd_classe") or p.get("CD_CLASSE") or 0),
-                        "estoque_atual":   float(p.get("estoque") or p.get("ESTOQUE") or 0),
-                        "custo_unitario":  float(p.get("custo_unitario") or p.get("CUSTO_UNITARIO") or 0),
-                        "preco_venda":     float(p.get("preco_venda") or p.get("PRECO_VENDA") or 0),
-                    })
-                LOTE_P = 200
-                ok_prod = True
-                for i in range(0, len(produtos), LOTE_P):
-                    if not post("/api/sync/produtos", {"filial_id": FILIAL_ID, "produtos": produtos[i:i+LOTE_P]}):
-                        ok_prod = False
-                        erros += 1
-                if ok_prod:
-                    logger.info(f"Produtos enviados: {len(produtos)}")
-            except Exception as e:
-                logger.error(f"Erro ao ler produtos: {e}")
-                erros += 1
+            # ── 1. PRODUTOS ──────────────────────────────────────────────────
+            sync_completo = deve_sincronizar_produtos()
+            if sync_completo:
+                logger.info("Lendo produtos completo (metadata + estoque)...")
+                try:
+                    estoque_rows = reader.ler_estoque_produtos(filial_id=FILIAL_ID, apenas_ativos=True)
+                    produtos = []
+                    for p in estoque_rows:
+                        produtos.append({
+                            "id_produto":      p.get("id_produto") or p.get("ID_PRODUTO"),
+                            "cd_produto":      str(p.get("cd_produto") or p.get("CD_PRODUTO") or ""),
+                            "descricao":       str(p.get("descricao") or p.get("DESCRICAO") or ""),
+                            "principio_ativo": str(p.get("principio_ativo") or p.get("PRINCIPIOATIVO") or ""),
+                            "laboratorio":     str(p.get("laboratorio") or p.get("LABORATORIO") or ""),
+                            "cd_laboratorio":  int(p.get("cd_laboratorio") or p.get("CD_LABORATORIO") or 0),
+                            "cd_grupo":        int(p.get("cd_grupo") or p.get("CD_GRUPO") or 0),
+                            "cd_classe":       int(p.get("cd_classe") or p.get("CD_CLASSE") or 0),
+                            "estoque_atual":   float(p.get("estoque") or p.get("ESTOQUE") or 0),
+                            "custo_unitario":  float(p.get("custo_unitario") or p.get("CUSTO_UNITARIO") or 0),
+                            "preco_venda":     float(p.get("preco_venda") or p.get("PRECO_VENDA") or 0),
+                        })
+                    LOTE_P = 200
+                    ok_prod = True
+                    for i in range(0, len(produtos), LOTE_P):
+                        if not post("/api/sync/produtos", {"filial_id": FILIAL_ID, "produtos": produtos[i:i+LOTE_P]}):
+                            ok_prod = False
+                            erros += 1
+                    if ok_prod:
+                        logger.info(f"Produtos enviados: {len(produtos)}")
+                except Exception as e:
+                    logger.error(f"Erro ao ler produtos: {e}")
+                    erros += 1
+                    sync_completo = False
+            else:
+                logger.info("Lendo estoque rapido (sem metadata)...")
+                try:
+                    rows = reader.ler_estoque_rapido(filial_id=FILIAL_ID)
+                    itens = [
+                        {
+                            "id_produto":     int(r.get("ID_PRODUTO") or r.get("id_produto")),
+                            "estoque":        float(r.get("ESTOQUE") or r.get("estoque") or 0),
+                            "custo_unitario": float(r.get("CUSTO_UNITARIO") or r.get("custo_unitario") or 0),
+                            "preco_venda":    float(r.get("PRECO_VENDA") or r.get("preco_venda") or 0),
+                        }
+                        for r in rows
+                    ]
+                    LOTE_E = 500
+                    ok_est = True
+                    for i in range(0, len(itens), LOTE_E):
+                        if not post("/api/sync/estoque", {"filial_id": FILIAL_ID, "itens": itens[i:i+LOTE_E]}):
+                            ok_est = False
+                            erros += 1
+                    if ok_est:
+                        logger.info(f"Estoque atualizado: {len(itens)} produtos")
+                except Exception as e:
+                    logger.error(f"Erro ao ler estoque rapido: {e}")
+                    erros += 1
 
             # ── 2. VENDAS (ultimos N dias, por produto por dia) ─────────────
             logger.info(f"Lendo vendas desde {data_inicio_vendas}...")
@@ -391,7 +437,7 @@ def sincronizar(dias_vendas: int = 180):
     logger.info(f"Sync concluido | erros={erros}")
 
     if erros == 0:
-        salvar_estado_sync()
+        salvar_estado_sync(incluiu_produtos=sync_completo)
 
     # Verificar se meta bonus do dia foi batida (envia alerta uma vez por dia)
     try:
