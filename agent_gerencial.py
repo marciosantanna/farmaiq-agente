@@ -671,15 +671,14 @@ def _verificar_relatorio_agendado():
         agora = datetime.now().strftime("%H:%M")
         h_conf = datetime.strptime(horario, "%H:%M")
         h_agora = datetime.strptime(agora, "%H:%M")
-        delta = (h_agora - h_conf).total_seconds()
-        if 0 <= delta <= 900:
+        if h_agora >= h_conf:
             url2 = f"{CLOUD_URL.rstrip('/')}/api/telegram/enviar-relatorio-gerente?filial_id={FILIAL_ID}"
-            r2 = requests.post(url2, headers=headers(), timeout=30)
+            r2 = requests.post(url2, headers=headers(), timeout=60)
             if r2.status_code == 200:
                 _relatorio_enviado_hoje = hoje
                 logger.info(f"Relatorio agendado enviado ({horario})")
             else:
-                logger.warning(f"Erro ao enviar relatorio agendado: {r2.status_code}")
+                logger.warning(f"Erro ao enviar relatorio agendado: {r2.status_code} {r2.text[:100]}")
     except Exception as e:
         logger.warning(f"Erro verificar relatorio agendado: {e}")
 
