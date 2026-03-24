@@ -253,30 +253,8 @@ def sincronizar(dias_vendas: int = 180):
                     erros += 1
                     sync_completo = False
             else:
-                logger.info("Lendo estoque rapido (sem metadata)...")
-                try:
-                    rows = reader.ler_estoque_rapido(filial_id=FILIAL_ID)
-                    itens = [
-                        {
-                            "id_produto":     int(r.get("ID_PRODUTO") or r.get("id_produto")),
-                            "estoque":        float(r.get("ESTOQUE") or r.get("estoque") or 0),
-                            "custo_unitario": float(r.get("CUSTO_UNITARIO") or r.get("custo_unitario") or 0),
-                            "preco_venda":    float(r.get("PRECO_VENDA") or r.get("preco_venda") or 0),
-                        }
-                        for r in rows
-                    ]
-                    LOTE_E = 5000  # unnest: 1 SQL por lote, pode enviar mais de uma vez
-                    ok_est = True
-                    _ping_api()  # acorda Render apos leitura do Farmasoft
-                    for i in range(0, len(itens), LOTE_E):
-                        if not post("/api/sync/estoque", {"filial_id": FILIAL_ID, "itens": itens[i:i+LOTE_E]}):
-                            ok_est = False
-                            erros += 1
-                    if ok_est:
-                        logger.info(f"Estoque atualizado: {len(itens)} produtos")
-                except Exception as e:
-                    logger.error(f"Erro ao ler estoque rapido: {e}")
-                    erros += 1
+                # Sync incremental: pula produtos (estoque vem na sync completa diaria)
+                logger.info("Sync incremental: produtos ignorados (sync completa diaria atualiza estoque)")
 
             # ── 2. VENDAS (ultimos N dias, por produto por dia) ─────────────
             logger.info(f"Lendo vendas desde {data_inicio_vendas}...")
