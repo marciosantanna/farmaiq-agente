@@ -1080,10 +1080,14 @@ class FarmasoftReader:
             return {}
 
     def ler_estoque_produtos(self, filial_id: int = 1, apenas_ativos: bool = True) -> List[Dict]:
-        """Retorna todos produtos com estoque, custo e info basica para sync cloud."""
+        """Retorna todos produtos com estoque, custo e info basica para sync cloud.
+
+        STATUS='I' = Inativo no Farmasoft. apenas_ativos=True exclui esses produtos.
+        """
         conn = self._get_connection()
         estoque_campo = f"ESTOQUE_{filial_id}" if filial_id <= 30 else "ESTOQUE_1"
         custo_campo = f"CUSTO_UNITARIO_{filial_id}" if filial_id <= 30 else "CUSTO_UNITARIO"
+        filtro_status = "AND p.STATUS != 'I'" if apenas_ativos else ""
         query = f"""
             SELECT
                 p.ID_PRODUTO,
@@ -1099,12 +1103,34 @@ class FarmasoftReader:
                 COALESCE(p.PRECO_VENDA, 0) as PRECO_VENDA
             FROM PRODUTOS p
             LEFT JOIN LABORATORIOS l ON p.CD_LABORATORIO = l.CD_LABORATORIO
+            WHERE 1=1
+            {filtro_status}
             ORDER BY p.ID_PRODUTO
         """
         try:
             return conn.executar_select(query)
         except Exception as e:
             logger.error(f"Erro ao ler estoque produtos: {e}")
+            return []
+
+    def ler_estoque_rapido(self, filial_id: int = 1) -> List[Dict]:
+        """Retorna apenas ID_PRODUTO + estoque + custo para update rapido de estoque."""
+        conn = self._get_connection()
+        estoque_campo = f"ESTOQUE_{filial_id}" if filial_id <= 30 else "ESTOQUE_1"
+        custo_campo = f"CUSTO_UNITARIO_{filial_id}" if filial_id <= 30 else "CUSTO_UNITARIO"
+        query = f"""
+            SELECT
+                p.ID_PRODUTO,
+                COALESCE(p.{estoque_campo}, 0) as ESTOQUE,
+                COALESCE(p.{custo_campo}, p.CUSTO_UNITARIO, p.CUSTO_MEDIO, 0) as CUSTO_UNITARIO,
+                COALESCE(p.PRECO_VENDA, 0) as PRECO_VENDA
+            FROM PRODUTOS p
+            ORDER BY p.ID_PRODUTO
+        """
+        try:
+            return conn.executar_select(query)
+        except Exception as e:
+            logger.error(f"Erro ao ler estoque rapido: {e}")
             return []
 
     def ler_vendas_por_produto_dia(
