@@ -241,13 +241,21 @@ def sincronizar(dias_vendas: int = 180):
                         })
                     LOTE_P = 200
                     ok_prod = True
+                    total_prod = len(produtos)
                     _ping_api()  # acorda Render apos leitura longa do Farmasoft
-                    for i in range(0, len(produtos), LOTE_P):
-                        if not post("/api/sync/produtos", {"filial_id": FILIAL_ID, "produtos": produtos[i:i+LOTE_P]}):
+                    lotes = list(range(0, total_prod, LOTE_P))
+                    for idx, i in enumerate(lotes):
+                        is_last = (idx == len(lotes) - 1)
+                        if not post("/api/sync/produtos", {
+                            "filial_id": FILIAL_ID,
+                            "produtos": produtos[i:i+LOTE_P],
+                            "is_last_batch": is_last,
+                            "total_enviados": total_prod,
+                        }):
                             ok_prod = False
                             erros += 1
                     if ok_prod:
-                        logger.info(f"Produtos enviados: {len(produtos)}")
+                        logger.info(f"Produtos enviados: {total_prod}")
                 except Exception as e:
                     logger.error(f"Erro ao ler produtos: {e}")
                     erros += 1
