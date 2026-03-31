@@ -999,6 +999,8 @@ class FarmasoftReader:
             query = f"""
                 SELECT
                     l.ID_PRODUTO,
+                    l.DESCRICAO,
+                    l.CD_GRUPO,
                     l.DATA_CAIXA,
                     l.QUANTIDADE,
                     l.USUARIO,
@@ -1025,6 +1027,8 @@ class FarmasoftReader:
             return [
                 {
                     "id_produto": int(r["ID_PRODUTO"]),
+                    "descricao": (r.get("DESCRICAO") or "").strip(),
+                    "cd_grupo": int(r.get("CD_GRUPO") or 0),
                     "data": r["DATA_CAIXA"],
                     "quantidade": float(r["QUANTIDADE"] or 0),
                     "usuario": (r.get("USUARIO") or "").strip(),

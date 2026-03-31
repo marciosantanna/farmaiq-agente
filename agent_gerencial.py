@@ -307,6 +307,37 @@ def sincronizar(dias_vendas: int = 180):
                 logger.error(f"Erro ao ler vendas: {e}")
                 erros += 1
 
+            # ── 2b. SAIDAS POR VALIDADE (LANCAMENTOS TIPO_VENDA='X') ──────────
+            logger.info("Lendo saidas por validade...")
+            try:
+                saidas_venc_raw = reader.ler_saidas_vencimento(
+                    data_inicio=data_inicio_vendas,
+                    data_fim=hoje,
+                    filial_id=FILIAL_ID,
+                )
+                saidas_venc = [
+                    {
+                        "data":           str(s["data"])[:10] if s.get("data") else None,
+                        "id_produto":     int(s["id_produto"]),
+                        "descricao":      str(s.get("descricao", "") or ""),
+                        "cd_grupo":       int(s.get("cd_grupo", 0) or 0),
+                        "quantidade":     float(s.get("quantidade", 0) or 0),
+                        "custo_unitario": float(s.get("custo_unitario", 0) or 0),
+                        "usuario":        str(s.get("usuario", "") or ""),
+                    }
+                    for s in saidas_venc_raw
+                ]
+                if saidas_venc:
+                    if not post("/api/sync/saidas-validade", {
+                        "filial_id": FILIAL_ID,
+                        "data_inicio": str(data_inicio_vendas),
+                        "saidas": saidas_venc,
+                    }):
+                        erros += 1
+                logger.info(f"Saidas validade enviadas: {len(saidas_venc)}")
+            except Exception as e:
+                logger.error(f"Erro ao ler saidas validade: {e}")
+
             # ── 3. BALCONISTAS (agregados diarios com contagem de transacoes) ─
             logger.info("Lendo balconistas dia...")
             try:
