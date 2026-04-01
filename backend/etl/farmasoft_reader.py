@@ -214,9 +214,18 @@ class FarmasoftReader:
             SELECT
                 v.CD_GRUPO,
                 g.DESCRICAO as GRUPO_DESCRICAO,
-                SUM(v.PRECO_TOTAL) as TOTAL_VENDIDO,
+                SUM(CASE WHEN v.STATUS IN ('V', 'S') THEN v.PRECO_TOTAL ELSE 0 END) as TOTAL_VENDIDO,
                 SUM(CASE
-                    WHEN v.STATUS IN ('V', 'S') THEN COALESCE(p.{custo_unitario_campo}, p.CUSTO_UNITARIO, p.{custo_campo}, 0) * v.QUANTIDADE
+                    WHEN v.STATUS IN ('V', 'S') THEN
+                        CASE
+                            WHEN COALESCE(p.{custo_unitario_campo}, p.CUSTO_UNITARIO, 0) > 0
+                             AND COALESCE(p.{custo_unitario_campo}, p.CUSTO_UNITARIO, 0) * v.QUANTIDADE <= v.PRECO_TOTAL
+                            THEN COALESCE(p.{custo_unitario_campo}, p.CUSTO_UNITARIO, 0) * v.QUANTIDADE
+                            WHEN COALESCE(p.{custo_campo}, p.CUSTO_MEDIO, 0) > 0
+                             AND COALESCE(p.{custo_campo}, p.CUSTO_MEDIO, 0) * v.QUANTIDADE <= v.PRECO_TOTAL
+                            THEN COALESCE(p.{custo_campo}, p.CUSTO_MEDIO, 0) * v.QUANTIDADE
+                            ELSE v.PRECO_TOTAL * 0.65
+                        END
                     ELSE 0
                 END) as TOTAL_CUSTO,
                 COUNT(CASE WHEN v.STATUS IN ('V', 'S') THEN 1 END) as QUANTIDADE
