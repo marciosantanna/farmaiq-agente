@@ -1,13 +1,14 @@
 """
-Inicializacao de historico anual no Neon
+Inicializacao de historico mensal no Neon
 
-Le totais mensais de um ano do Farmasoft e envia para o historico_mensal no Neon.
-Usar uma unica vez por ano para popular a base de referencia da meta automatica.
+Le totais mensais do Farmasoft e envia para o historico_mensal no Neon.
+Usar para popular a base de referencia da meta automatica.
 
 Uso:
-    python inicializar_historico.py --ano 2025
-    python inicializar_historico.py --ano 2025 --mes 4     # so abril
-    python inicializar_historico.py --ano 2025 --sobrescrever
+    python inicializar_historico.py                        # ultimos 12 meses (padrao)
+    python inicializar_historico.py --ano 2025             # ano completo 2025
+    python inicializar_historico.py --ano 2025 --mes 4     # so abril/2025
+    python inicializar_historico.py --sobrescrever         # forca regravacao
 """
 import os
 import sys
@@ -103,9 +104,19 @@ def processar_mes(reader, ano: int, mes: int, sobrescrever: bool) -> bool:
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--ano",         type=int, required=True,        help="Ano a processar (ex: 2025)")
-    parser.add_argument("--mes",         type=int, default=None,          help="Mes especifico (1-12). Omitir = todos os meses")
+    parser = argparse.ArgumentParser(
+        description="Inicializa historico_mensal no Neon a partir do Farmasoft.",
+        epilog=(
+            "Exemplos:\n"
+            "  python inicializar_historico.py              # ultimos 12 meses (padrao)\n"
+            "  python inicializar_historico.py --ano 2025   # ano completo 2025\n"
+            "  python inicializar_historico.py --ano 2025 --mes 4  # so abril/2025\n"
+            "  python inicializar_historico.py --sobrescrever      # forca regravacao"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--ano",         type=int, default=None,  help="Ano especifico (omitir = ultimos 12 meses)")
+    parser.add_argument("--mes",         type=int, default=None,  help="Mes especifico 1-12 (requer --ano)")
     parser.add_argument("--sobrescrever",action="store_true", default=False, help="Sobrescrever se ja existir no Neon")
     args = parser.parse_args()
 
@@ -114,15 +125,35 @@ def main():
         sys.exit(1)
 
     hoje = date.today()
-    meses = [args.mes] if args.mes else list(range(1, 13))
-    # Nao processar meses futuros
-    meses = [m for m in meses if date(args.ano, m, 1) < hoje.replace(day=1)]
+    mes_atual = hoje.replace(day=1)
 
-    if not meses:
+    # Montar lista de (ano, mes) a processar
+    if args.ano and args.mes:
+        periodos = [(args.ano, args.mes)]
+    elif args.ano:
+        periodos = [(args.ano, m) for m in range(1, 13)]
+    else:
+        # Padrao: ultimos 12 meses fechados (1 ano para tras a partir de hoje)
+        periodos = []
+        for i in range(1, 13):
+            # Subtrai i meses do mes atual
+            ano_ref = hoje.year
+            mes_ref = hoje.month - i
+            while mes_ref <= 0:
+                mes_ref += 12
+                ano_ref -= 1
+            periodos.append((ano_ref, mes_ref))
+        periodos.reverse()
+
+    # Excluir meses futuros ou mes corrente (ainda aberto)
+    periodos = [(a, m) for a, m in periodos if date(a, m, 1) < mes_atual]
+
+    if not periodos:
         logger.info("Nenhum mes a processar.")
         return
 
-    logger.info(f"Inicializando historico {args.ano} | filial={FILIAL_ID} | meses={meses} | sobrescrever={args.sobrescrever}")
+    descricao = f"ano={args.ano}" if args.ano else "ultimos 12 meses"
+    logger.info(f"Inicializando historico [{descricao}] | filial={FILIAL_ID} | periodos={periodos} | sobrescrever={args.sobrescrever}")
 
     from backend.config import settings
     from backend.etl.farmasoft_reader import FarmasoftReader
@@ -136,12 +167,12 @@ def main():
     reader = FarmasoftReader(conn)
 
     ok_count = 0
-    for mes in meses:
-        if processar_mes(reader, args.ano, mes, args.sobrescrever):
+    for ano, mes in periodos:
+        if processar_mes(reader, ano, mes, args.sobrescrever):
             ok_count += 1
 
     conn.desconectar()
-    logger.info(f"Concluido: {ok_count}/{len(meses)} meses enviados")
+    logger.info(f"Concluido: {ok_count}/{len(periodos)} meses enviados")
 
 
 if __name__ == "__main__":
