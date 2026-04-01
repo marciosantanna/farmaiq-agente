@@ -129,6 +129,10 @@ def main():
     from backend.utils.database import FarmasoftConnection
 
     conn = FarmasoftConnection()
+    if not conn.conectar():
+        logger.error("Falha ao conectar ao Farmasoft. Verifique as configuracoes.")
+        sys.exit(1)
+
     reader = FarmasoftReader(conn)
 
     ok_count = 0
@@ -136,7 +140,7 @@ def main():
         if processar_mes(reader, args.ano, mes, args.sobrescrever):
             ok_count += 1
 
-    conn.fechar()
+    conn.desconectar()
     logger.info(f"Concluido: {ok_count}/{len(meses)} meses enviados")
 
 
