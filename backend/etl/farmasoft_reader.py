@@ -1168,7 +1168,15 @@ class FarmasoftReader:
                 COALESCE(vd.NOME, '') as NOME_BALCONISTA,
                 SUM(v.QUANTIDADE) as QUANTIDADE,
                 SUM(v.PRECO_TOTAL) as VALOR_TOTAL,
-                SUM(COALESCE(p.{custo_campo}, p.CUSTO_UNITARIO, p.{custo_medio_campo}, 0) * v.QUANTIDADE) as CUSTO_TOTAL
+                SUM(CASE
+                    WHEN COALESCE(p.{custo_campo}, p.CUSTO_UNITARIO, 0) > 0
+                     AND COALESCE(p.{custo_campo}, p.CUSTO_UNITARIO, 0) * v.QUANTIDADE <= v.PRECO_TOTAL
+                    THEN COALESCE(p.{custo_campo}, p.CUSTO_UNITARIO, 0) * v.QUANTIDADE
+                    WHEN COALESCE(p.{custo_medio_campo}, p.CUSTO_MEDIO, 0) > 0
+                     AND COALESCE(p.{custo_medio_campo}, p.CUSTO_MEDIO, 0) * v.QUANTIDADE <= v.PRECO_TOTAL
+                    THEN COALESCE(p.{custo_medio_campo}, p.CUSTO_MEDIO, 0) * v.QUANTIDADE
+                    ELSE v.PRECO_TOTAL * 0.65
+                END) as CUSTO_TOTAL
             FROM VENDAS v
             INNER JOIN PRODUTOS p ON v.ID_PRODUTO = p.ID_PRODUTO
             LEFT JOIN VENDEDORES vd ON v.CD_VENDEDOR = vd.CD_VENDEDOR
