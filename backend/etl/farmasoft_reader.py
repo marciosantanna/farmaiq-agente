@@ -562,7 +562,15 @@ class FarmasoftReader:
                 l.NOME as LABORATORIO_NOME,
                 p.PRINCIPIOATIVO,
                 SUM(v.PRECO_TOTAL) as TOTAL_VENDIDO,
-                SUM(COALESCE(p.{custo_unitario_campo}, p.CUSTO_UNITARIO, p.{custo_campo}, 0) * v.QUANTIDADE) as TOTAL_CUSTO,
+                SUM(CASE
+                    WHEN COALESCE(p.{custo_unitario_campo}, p.CUSTO_UNITARIO, 0) > 0
+                     AND COALESCE(p.{custo_unitario_campo}, p.CUSTO_UNITARIO, 0) * v.QUANTIDADE <= v.PRECO_TOTAL
+                    THEN COALESCE(p.{custo_unitario_campo}, p.CUSTO_UNITARIO, 0) * v.QUANTIDADE
+                    WHEN COALESCE(p.{custo_campo}, p.CUSTO_MEDIO, 0) > 0
+                     AND COALESCE(p.{custo_campo}, p.CUSTO_MEDIO, 0) * v.QUANTIDADE <= v.PRECO_TOTAL
+                    THEN COALESCE(p.{custo_campo}, p.CUSTO_MEDIO, 0) * v.QUANTIDADE
+                    ELSE v.PRECO_TOTAL * 0.65
+                END) as TOTAL_CUSTO,
                 SUM(v.QUANTIDADE) as QUANTIDADE_VENDIDA,
                 COUNT(DISTINCT v.DATA_CAIXA) as DIAS_COM_VENDA
             FROM VENDAS v
@@ -1413,7 +1421,15 @@ class FarmasoftReader:
                 COUNT(DISTINCT v.ID_VENDA) as QTD_TRANSACOES,
                 COUNT(*) as QTD_ITENS,
                 SUM(v.PRECO_TOTAL) as VALOR_TOTAL,
-                SUM(COALESCE(p.{custo_campo}, p.CUSTO_UNITARIO, p.{custo_medio_campo}, 0) * v.QUANTIDADE) as CUSTO_TOTAL
+                SUM(CASE
+                    WHEN COALESCE(p.{custo_campo}, p.CUSTO_UNITARIO, 0) > 0
+                     AND COALESCE(p.{custo_campo}, p.CUSTO_UNITARIO, 0) * v.QUANTIDADE <= v.PRECO_TOTAL
+                    THEN COALESCE(p.{custo_campo}, p.CUSTO_UNITARIO, 0) * v.QUANTIDADE
+                    WHEN COALESCE(p.{custo_medio_campo}, p.CUSTO_MEDIO, 0) > 0
+                     AND COALESCE(p.{custo_medio_campo}, p.CUSTO_MEDIO, 0) * v.QUANTIDADE <= v.PRECO_TOTAL
+                    THEN COALESCE(p.{custo_medio_campo}, p.CUSTO_MEDIO, 0) * v.QUANTIDADE
+                    ELSE v.PRECO_TOTAL * 0.65
+                END) as CUSTO_TOTAL
             FROM VENDAS v
             LEFT JOIN VENDEDORES vd ON v.CD_VENDEDOR = vd.CD_VENDEDOR
             LEFT JOIN PRODUTOS p ON v.ID_PRODUTO = p.ID_PRODUTO
@@ -1490,7 +1506,15 @@ class FarmasoftReader:
                 v.CD_VENDEDOR as CD_FUNCIONARIO,
                 COALESCE(vd.NOME, 'Vendedor ' || CAST(v.CD_VENDEDOR AS VARCHAR(10))) as NOME,
                 SUM(v.PRECO_TOTAL) as TOTAL_VENDIDO,
-                SUM(COALESCE(p.{custo_unitario_campo}, p.CUSTO_UNITARIO, p.{custo_campo}, 0) * v.QUANTIDADE) as TOTAL_CUSTO,
+                SUM(CASE
+                    WHEN COALESCE(p.{custo_unitario_campo}, p.CUSTO_UNITARIO, 0) > 0
+                     AND COALESCE(p.{custo_unitario_campo}, p.CUSTO_UNITARIO, 0) * v.QUANTIDADE <= v.PRECO_TOTAL
+                    THEN COALESCE(p.{custo_unitario_campo}, p.CUSTO_UNITARIO, 0) * v.QUANTIDADE
+                    WHEN COALESCE(p.{custo_campo}, p.CUSTO_MEDIO, 0) > 0
+                     AND COALESCE(p.{custo_campo}, p.CUSTO_MEDIO, 0) * v.QUANTIDADE <= v.PRECO_TOTAL
+                    THEN COALESCE(p.{custo_campo}, p.CUSTO_MEDIO, 0) * v.QUANTIDADE
+                    ELSE v.PRECO_TOTAL * 0.65
+                END) as TOTAL_CUSTO,
                 COUNT(DISTINCT v.ID_VENDA) as QTD_VENDAS,
                 COUNT(*) as QTD_ITENS
             FROM VENDAS v
