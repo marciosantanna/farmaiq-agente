@@ -420,7 +420,7 @@ def sincronizar(dias_vendas: int = 180):
                         "filial_destino":       int(t.get("filial_destino") or 0),
                         "nome_filial_destino":  str(t.get("nome_filial_destino") or ""),
                         "quantidade":           float(t.get("qtd_enviada") or t.get("qtd_solicitada") or 0),
-                        "valor":                float(t.get("valor") or 0),
+                        "valor":                float(t.get("valor") or 0) * float(t.get("qtd_enviada") or t.get("qtd_solicitada") or 0),
                         "sentido":              str(t.get("sentido") or ""),
                         "status_transfer":      str(t.get("status_transfer") or ""),
                     })
