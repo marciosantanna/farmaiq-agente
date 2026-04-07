@@ -499,6 +499,21 @@ def sincronizar(dias_vendas: int = 180):
     except Exception as e:
         logger.warning(f"Erro ao verificar alerta bonus: {e}")
 
+    # Verificar se meta mensal atingiu 90% ou 100% (envia alerta uma vez por gatilho/mes)
+    try:
+        url = f"{CLOUD_URL.rstrip('/')}/api/telegram/verificar-alerta-meta-mensal?filial_id={FILIAL_ID}"
+        r = requests.post(url, headers=headers(), timeout=30)
+        if r.status_code == 200:
+            status = r.json().get("status", "")
+            if status == "alerta_enviado":
+                gatilho = r.json().get("gatilho", "")
+                pct = r.json().get("pct", 0)
+                logger.info(f"Alerta meta mensal {gatilho}% enviado ({pct}%)")
+            else:
+                logger.info(f"Verificacao meta mensal: {status}")
+    except Exception as e:
+        logger.warning(f"Erro ao verificar alerta meta mensal: {e}")
+
     return erros == 0
 
 
