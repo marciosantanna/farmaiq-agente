@@ -263,8 +263,36 @@ def sincronizar(dias_vendas: int = 180):
                     erros += 1
                     sync_completo = False
             else:
-                # Sync incremental: pula produtos (estoque vem na sync completa diaria)
-                logger.info("Sync incremental: produtos ignorados (sync completa diaria atualiza estoque)")
+                # Sync incremental: atualiza apenas estoque/custo/preco (sem metadata)
+                logger.info("Sync incremental: lendo estoque rapido...")
+                try:
+                    estoq_rows = reader.ler_estoque_rapido(filial_id=FILIAL_ID)
+                    itens_estoq = [
+                        {
+                            "id_produto":    int(r.get("id_produto") or r.get("ID_PRODUTO") or 0),
+                            "estoque":       float(r.get("estoque") or r.get("ESTOQUE") or 0),
+                            "custo_unitario":float(r.get("custo_unitario") or r.get("CUSTO_UNITARIO") or 0),
+                            "preco_venda":   float(r.get("preco_venda") or r.get("PRECO_VENDA") or 0),
+                        }
+                        for r in estoq_rows
+                        if (r.get("id_produto") or r.get("ID_PRODUTO"))
+                    ]
+                    LOTE_E = 500
+                    ok_estoq = True
+                    for i in range(0, len(itens_estoq), LOTE_E):
+                        if not post("/api/sync/estoque", {
+                            "filial_id": FILIAL_ID,
+                            "itens": itens_estoq[i:i+LOTE_E],
+                        }):
+                            ok_estoq = False
+                            erros += 1
+                    if ok_estoq:
+                        logger.info(f"Estoque rapido enviado: {len(itens_estoq)} produtos")
+                    else:
+                        logger.warning("Estoque rapido: alguns lotes falharam")
+                except Exception as e:
+                    logger.error(f"Estoque rapido erro: {e}")
+                    erros += 1
 
             # ── 2. VENDAS (ultimos N dias, por produto por dia) ─────────────
             logger.info(f"Lendo vendas desde {data_inicio_vendas}...")
