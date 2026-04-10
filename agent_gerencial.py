@@ -447,6 +447,18 @@ def sincronizar(dias_vendas: int = 180):
                         d = (t.get("data_conclusao") or t.get("DATA_CONCLUSAO")
                              or t.get("data_geracao") or t.get("DATA_GERACAO"))
                     qtd = float(t.get("qtd_enviada") or t.get("qtd_recebida") or t.get("qtd_solicitada") or 0)
+                    # Custo unitario do produto (mesmo cap usado em ler_vendas_periodo)
+                    custo_unit = float(t.get("custo_unitario_prod") or 0)
+                    custo_medio = float(t.get("custo_medio_prod") or 0)
+                    valor_it = float(t.get("valor") or 0)
+                    # Aplicar cap: custo_unitario * qtd nao pode ser maior que valor_it * qtd
+                    # (evita multiplicar preco de caixa por unidades individuais)
+                    if custo_unit > 0 and custo_unit <= valor_it:
+                        valor_total = custo_unit * qtd
+                    elif custo_medio > 0 and custo_medio <= valor_it:
+                        valor_total = custo_medio * qtd
+                    else:
+                        valor_total = valor_it * qtd
                     transf.append({
                         "cd_transfer":          int(t.get("cd_transfer") or 0),
                         "data_transfer":        str(d)[:10] if d else None,
@@ -457,7 +469,7 @@ def sincronizar(dias_vendas: int = 180):
                         "filial_destino":       int(t.get("filial_destino") or 0),
                         "nome_filial_destino":  str(t.get("nome_filial_destino") or ""),
                         "quantidade":           qtd,
-                        "valor":                float(t.get("valor") or 0) * qtd,
+                        "valor":                round(valor_total, 2),
                         "sentido":              sentido,
                         "status_transfer":      str(t.get("status_transfer") or ""),
                     })

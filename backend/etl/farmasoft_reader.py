@@ -1716,7 +1716,10 @@ class FarmasoftReader:
         """
         nomes_filiais = self._carregar_nomes_filiais()
 
-        query = """
+        custo_campo = f"CUSTO_MEDIO_{filial_id}" if filial_id <= 30 else "CUSTO_MEDIO"
+        custo_unitario_campo = f"CUSTO_UNITARIO_{filial_id}" if filial_id <= 30 else "CUSTO_UNITARIO"
+
+        query = f"""
             SELECT
                 t.CD_TRANSFER,
                 t.DATA_GERACAO,
@@ -1735,9 +1738,12 @@ class FarmasoftReader:
                 it.QUANTIDADE_ENVIADA,
                 it.QUANTIDADE_RECEBIDA,
                 it.VALOR,
-                it.STATUS as STATUS_ITEM
+                it.STATUS as STATUS_ITEM,
+                COALESCE(p.{custo_unitario_campo}, p.CUSTO_UNITARIO, 0) as CUSTO_UNITARIO_PROD,
+                COALESCE(p.{custo_campo}, p.CUSTO_MEDIO, 0) as CUSTO_MEDIO_PROD
             FROM TRANSFER t
             INNER JOIN ITENS_TRANSFER it ON it.CD_TRANSFER = t.CD_TRANSFER
+            LEFT JOIN PRODUTOS p ON p.ID_PRODUTO = it.ID_PRODUTO
             WHERE (t.CD_FILIAL_ORIGEM = ? OR t.CD_FILIAL_DESTINO = ?)
               AND (
                 t.DATA_GERACAO  BETWEEN ? AND ?
