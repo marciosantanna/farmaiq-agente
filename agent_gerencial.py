@@ -437,7 +437,16 @@ def sincronizar(dias_vendas: int = 180):
                 )
                 transf = []
                 for t in transf_raw:
-                    d = t.get("data_geracao") or t.get("DATA_GERACAO")
+                    sentido = str(t.get("sentido") or "")
+                    # Data efetiva: ENVIADA usa data_envio, RECEBIDA usa data_conclusao
+                    # Fallback para data_geracao em ambos
+                    if sentido == "ENVIADA":
+                        d = (t.get("data_envio") or t.get("DATA_ENVIO")
+                             or t.get("data_geracao") or t.get("DATA_GERACAO"))
+                    else:
+                        d = (t.get("data_conclusao") or t.get("DATA_CONCLUSAO")
+                             or t.get("data_geracao") or t.get("DATA_GERACAO"))
+                    qtd = float(t.get("qtd_enviada") or t.get("qtd_recebida") or t.get("qtd_solicitada") or 0)
                     transf.append({
                         "cd_transfer":          int(t.get("cd_transfer") or 0),
                         "data_transfer":        str(d)[:10] if d else None,
@@ -447,9 +456,9 @@ def sincronizar(dias_vendas: int = 180):
                         "nome_filial_origem":   str(t.get("nome_filial_origem") or ""),
                         "filial_destino":       int(t.get("filial_destino") or 0),
                         "nome_filial_destino":  str(t.get("nome_filial_destino") or ""),
-                        "quantidade":           float(t.get("qtd_enviada") or t.get("qtd_solicitada") or 0),
-                        "valor":                float(t.get("valor") or 0) * float(t.get("qtd_enviada") or t.get("qtd_solicitada") or 0),
-                        "sentido":              str(t.get("sentido") or ""),
+                        "quantidade":           qtd,
+                        "valor":                float(t.get("valor") or 0) * qtd,
+                        "sentido":              sentido,
                         "status_transfer":      str(t.get("status_transfer") or ""),
                     })
                 if not post("/api/sync/transferencias", {"filial_id": FILIAL_ID, "transferencias": transf}):

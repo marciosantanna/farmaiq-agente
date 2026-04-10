@@ -1739,11 +1739,20 @@ class FarmasoftReader:
             FROM TRANSFER t
             INNER JOIN ITENS_TRANSFER it ON it.CD_TRANSFER = t.CD_TRANSFER
             WHERE (t.CD_FILIAL_ORIGEM = ? OR t.CD_FILIAL_DESTINO = ?)
-              AND t.DATA_GERACAO BETWEEN ? AND ?
+              AND (
+                t.DATA_GERACAO  BETWEEN ? AND ?
+                OR t.DATA_ENVIO BETWEEN ? AND ?
+                OR t.DATA_CONCLUSAO BETWEEN ? AND ?
+              )
             ORDER BY t.DATA_GERACAO DESC, t.CD_TRANSFER DESC
         """
         try:
-            rows = self.conn.executar_select(query, (filial_id, filial_id, data_inicio, data_fim))
+            rows = self.conn.executar_select(query, (
+                filial_id, filial_id,
+                data_inicio, data_fim,
+                data_inicio, data_fim,
+                data_inicio, data_fim,
+            ))
         except Exception as e:
             logger.warning(f"[transferencias] Erro: {e}")
             return []
