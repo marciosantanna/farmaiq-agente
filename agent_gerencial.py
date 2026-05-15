@@ -238,6 +238,8 @@ def sincronizar(dias_vendas: int = 180):
                             "estoque_atual":   float(p.get("estoque") or p.get("ESTOQUE") or 0),
                             "custo_unitario":  float(p.get("custo_unitario") or p.get("CUSTO_UNITARIO") or 0),
                             "preco_venda":     float(p.get("preco_venda") or p.get("PRECO_VENDA") or 0),
+                            "ean":             str(p.get("ean") or p.get("EAN") or ""),
+                            "ean2":            str(p.get("ean2") or p.get("EAN2") or ""),
                         })
                     LOTE_P = 200
                     ok_prod = True
