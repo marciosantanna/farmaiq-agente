@@ -1121,7 +1121,9 @@ class FarmasoftReader:
                 p.CD_CLASSE,
                 COALESCE(p.{estoque_campo}, 0) as ESTOQUE,
                 COALESCE(p.{custo_campo}, p.CUSTO_UNITARIO, p.CUSTO_MEDIO, 0) as CUSTO_UNITARIO,
-                COALESCE(p.PRECO_VENDA, 0) as PRECO_VENDA
+                COALESCE(p.PRECO_VENDA, 0) as PRECO_VENDA,
+                p.CODIGO_BARRAS_1 as EAN,
+                p.CODIGO_BARRAS_2 as EAN2
             FROM PRODUTOS p
             LEFT JOIN LABORATORIOS l ON p.CD_LABORATORIO = l.CD_LABORATORIO
             WHERE 1=1
