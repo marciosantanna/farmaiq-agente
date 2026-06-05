@@ -1690,6 +1690,36 @@ class FarmasoftReader:
             logger.warning(f"Erro em ler_vendas_por_balconista: {e}")
             return []
 
+    def ler_contas_pagar(self, data_inicio: date, filial_id: int = 1) -> List[Dict]:
+        """Le CONTAS_PAGAR do Farmasoft a partir de data_inicio (somente leitura)."""
+        conn = self._get_connection()
+        rows = conn.executar_select(
+            "SELECT cp.CD_CONTAS_PAGAR, cp.CD_DISTRIBUIDOR, cp.NUMERO_NOTA, cp.DT_NOTA, "
+            "cp.DT_VENCIMENTO, cp.VALOR, cp.VL_SALDO, cp.CODIGO_BARRAS, cp.BANCO, cp.HISTORICO, "
+            "d.NOME as FORNECEDOR "
+            "FROM CONTAS_PAGAR cp "
+            "LEFT JOIN DISTRIBUIDORES d ON d.CD_DISTRIBUIDOR = cp.CD_DISTRIBUIDOR "
+            "WHERE cp.CD_FILIAL = ? AND cp.DT_VENCIMENTO >= ? "
+            "ORDER BY cp.DT_VENCIMENTO",
+            (filial_id, data_inicio),
+        )
+        resultado = []
+        for r in rows:
+            resultado.append({
+                "cd_contas_pagar": int(r["CD_CONTAS_PAGAR"] or 0),
+                "cd_distribuidor":  int(r["CD_DISTRIBUIDOR"] or 0),
+                "fornecedor":       (r["FORNECEDOR"] or "").strip(),
+                "numero_nf":        str(r["NUMERO_NOTA"] or "").strip(),
+                "dt_nota":          str(r["DT_NOTA"])[:10] if r["DT_NOTA"] else None,
+                "dt_vencimento":    str(r["DT_VENCIMENTO"])[:10] if r["DT_VENCIMENTO"] else None,
+                "valor":            float(r["VALOR"] or 0),
+                "vl_saldo":         float(r["VL_SALDO"] or 0),
+                "codigo_barras":    (r["CODIGO_BARRAS"] or "").strip(),
+                "banco":            (r["BANCO"] or "").strip(),
+                "historico":        (r["HISTORICO"] or "").strip(),
+            })
+        return resultado
+
     def _carregar_nomes_filiais(self) -> Dict[int, str]:
         """Busca nomes das filiais no Farmasoft. Retorna dict vazio se nao encontrar."""
         for tabela, col_id, col_nome in [

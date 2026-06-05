@@ -512,6 +512,22 @@ def sincronizar(dias_vendas: int = 180):
                 logger.error(f"Erro ao ler recebimentos: {e}")
                 erros += 1
 
+            # ── 6. CONTAS A PAGAR / BOLETOS (a partir de 01/06/2026) ────────
+            logger.info("Lendo contas a pagar...")
+            try:
+                DATA_INICIO_BOLETOS = date(2026, 6, 1)
+                cp_raw = reader.ler_contas_pagar(
+                    data_inicio=DATA_INICIO_BOLETOS,
+                    filial_id=FILIAL_ID,
+                )
+                if not post("/api/sync/contas-pagar", {"filial_id": FILIAL_ID, "contas": cp_raw}):
+                    erros += 1
+                else:
+                    logger.info(f"Contas a pagar enviadas: {len(cp_raw)}")
+            except Exception as e:
+                logger.error(f"Erro ao ler contas a pagar: {e}")
+                erros += 1
+
     except Exception as e:
         logger.error(f"Erro de conexao Farmasoft: {e}")
         post("/api/sync/status", {
@@ -748,6 +764,7 @@ def main():
             dias = args.dias if args.dias else calcular_dias_sync()
             sincronizar(dias_vendas=dias)
             _verificar_relatorio_agendado()
+            _verificar_alerta_boletos()
             logger.info(f"Aguardando {INTERVALO//60} minutos...")
             time.sleep(INTERVALO)
     else:
@@ -788,12 +805,43 @@ def _verificar_relatorio_agendado():
         logger.warning(f"Erro verificar relatorio agendado: {e}")
 
 
+_boletos_alerta_enviado: str = ""
+
+BOLETOS_ALERTA_HORA = "08:00"
+
+
+def _verificar_alerta_boletos():
+    """Envia alerta Telegram com boletos do dia, uma vez por dia as 08:00."""
+    global _boletos_alerta_enviado
+    hoje = date.today().isoformat()
+    if _boletos_alerta_enviado == hoje:
+        return
+    agora = datetime.now().strftime("%H:%M")
+    if datetime.strptime(agora, "%H:%M") < datetime.strptime(BOLETOS_ALERTA_HORA, "%H:%M"):
+        return
+    try:
+        url = f"{CLOUD_URL.rstrip('/')}/api/boletos/alerta-telegram?filial_id={FILIAL_ID}"
+        r = requests.post(url, headers=headers(), timeout=30)
+        if r.status_code == 200:
+            d = r.json()
+            _boletos_alerta_enviado = hoje
+            if d.get("total_boletos", 0) > 0:
+                logger.info(f"Alerta boletos enviado: {d['total_boletos']} boleto(s) R$ {d.get('valor_total', 0):.2f}")
+            else:
+                logger.info("Alerta boletos: nenhum vencimento hoje")
+        else:
+            logger.warning(f"Erro alerta boletos: {r.status_code}")
+    except Exception as e:
+        logger.warning(f"Erro verificar alerta boletos: {e}")
+
+
 def _loop_background(dias_fixo):
     """Loop de sync automatico rodando em background junto com o webhook."""
     while True:
         dias = dias_fixo if dias_fixo else calcular_dias_sync()
         _fazer_sync_thread(dias)
         _verificar_relatorio_agendado()
+        _verificar_alerta_boletos()
         logger.info(f"Proximo sync automatico em {INTERVALO//60} minutos")
         time.sleep(INTERVALO)
 
