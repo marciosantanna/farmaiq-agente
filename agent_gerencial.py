@@ -548,8 +548,9 @@ def sincronizar(dias_vendas: int = 180):
 
     logger.info(f"Sync concluido | erros={erros}")
 
-    if erros == 0:
-        salvar_estado_sync(incluiu_produtos=sync_completo)
+    # Salva estado mesmo com erros parciais para evitar loop de sync completo.
+    # Produtos so sao marcados se nao houve erros (garantia de integridade).
+    salvar_estado_sync(incluiu_produtos=(sync_completo and erros == 0))
 
     # Verificar se meta bonus do dia foi batida (envia alerta uma vez por dia)
     try:
