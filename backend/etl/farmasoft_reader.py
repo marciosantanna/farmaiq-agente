@@ -1693,16 +1693,30 @@ class FarmasoftReader:
     def ler_contas_pagar(self, data_inicio: date, filial_id: int = 1) -> List[Dict]:
         """Le CONTAS_PAGAR do Farmasoft a partir de data_inicio (somente leitura)."""
         conn = self._get_connection()
-        rows = conn.executar_select(
-            "SELECT cp.CD_CONTAS_PAGAR, cp.CD_DISTRIBUIDOR, cp.NUMERO_NOTA, cp.DT_NOTA, "
-            "cp.DT_VENCIMENTO, cp.VALOR, cp.VL_SALDO, cp.CODIGO_BARRAS, cp.BANCO, cp.HISTORICO, "
-            "d.NOME as FORNECEDOR "
-            "FROM CONTAS_PAGAR cp "
-            "LEFT JOIN DISTRIBUIDORES d ON d.CD_DISTRIBUIDOR = cp.CD_DISTRIBUIDOR "
-            "WHERE cp.CD_FILIAL = ? AND cp.DT_VENCIMENTO >= ? "
-            "ORDER BY cp.DT_VENCIMENTO",
-            (filial_id, data_inicio),
-        )
+        # Tenta com PARCELA; se coluna nao existir, tenta sem
+        for sql in [
+            ("SELECT cp.CD_CONTAS_PAGAR, cp.CD_DISTRIBUIDOR, cp.NUMERO_NOTA, cp.DT_NOTA, "
+             "cp.DT_VENCIMENTO, cp.VALOR, cp.VL_SALDO, cp.HISTORICO, cp.PARCELA, "
+             "d.NOME as FORNECEDOR "
+             "FROM CONTAS_PAGAR cp "
+             "LEFT JOIN DISTRIBUIDORES d ON d.CD_DISTRIBUIDOR = cp.CD_DISTRIBUIDOR "
+             "WHERE cp.CD_FILIAL = ? AND cp.DT_VENCIMENTO >= ? "
+             "ORDER BY cp.DT_VENCIMENTO"),
+            ("SELECT cp.CD_CONTAS_PAGAR, cp.CD_DISTRIBUIDOR, cp.NUMERO_NOTA, cp.DT_NOTA, "
+             "cp.DT_VENCIMENTO, cp.VALOR, cp.VL_SALDO, cp.HISTORICO, "
+             "d.NOME as FORNECEDOR "
+             "FROM CONTAS_PAGAR cp "
+             "LEFT JOIN DISTRIBUIDORES d ON d.CD_DISTRIBUIDOR = cp.CD_DISTRIBUIDOR "
+             "WHERE cp.CD_FILIAL = ? AND cp.DT_VENCIMENTO >= ? "
+             "ORDER BY cp.DT_VENCIMENTO"),
+        ]:
+            try:
+                rows = conn.executar_select(sql, (filial_id, data_inicio))
+                break
+            except Exception:
+                rows = None
+        if rows is None:
+            return []
         resultado = []
         for r in rows:
             resultado.append({
@@ -1714,9 +1728,8 @@ class FarmasoftReader:
                 "dt_vencimento":    str(r["DT_VENCIMENTO"])[:10] if r["DT_VENCIMENTO"] else None,
                 "valor":            float(r["VALOR"] or 0),
                 "vl_saldo":         float(r["VL_SALDO"] or 0),
-                "codigo_barras":    (r["CODIGO_BARRAS"] or "").strip(),
-                "banco":            (r["BANCO"] or "").strip(),
-                "historico":        (r["HISTORICO"] or "").strip(),
+                "historico":        (r.get("HISTORICO") or "").strip(),
+                "parcela":          str(r["PARCELA"]).strip() if r.get("PARCELA") else "",
             })
         return resultado
 
