@@ -740,12 +740,46 @@ def main():
     args = parser.parse_args()
 
     if args.migrate:
-        from backend.utils.database import postgres_connection
-        from backend.sync.schema import criar_tabelas_app
+        import psycopg2
+        import psycopg2.extras
+        db_url = os.getenv("DATABASE_URL", "")
+        if not db_url:
+            logger.error("DATABASE_URL nao configurada no .env")
+            sys.exit(1)
         logger.info("Executando migrations no banco Neon...")
+        sqls = [
+            """CREATE TABLE IF NOT EXISTS sync_contas_pagar (
+                id              BIGSERIAL PRIMARY KEY,
+                filial_id       INTEGER NOT NULL,
+                cd_contas_pagar INTEGER NOT NULL,
+                cd_distribuidor INTEGER,
+                fornecedor      TEXT,
+                numero_nf       TEXT,
+                dt_nota         DATE,
+                dt_vencimento   DATE NOT NULL,
+                valor           NUMERIC(12,2) DEFAULT 0,
+                vl_saldo        NUMERIC(12,2) DEFAULT 0,
+                codigo_barras   TEXT,
+                banco           TEXT,
+                historico       TEXT,
+                pago            BOOLEAN DEFAULT FALSE,
+                pago_em         TIMESTAMP,
+                pago_por        TEXT,
+                synced_at       TIMESTAMP DEFAULT NOW(),
+                UNIQUE (filial_id, cd_contas_pagar)
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_sync_cp_filial_venc ON sync_contas_pagar (filial_id, dt_vencimento)",
+            "CREATE INDEX IF NOT EXISTS idx_sync_cp_pago ON sync_contas_pagar (filial_id, pago, dt_vencimento)",
+        ]
         try:
-            with postgres_connection() as pg:
-                criar_tabelas_app(pg)
+            conn = psycopg2.connect(db_url)
+            conn.autocommit = True
+            cur = conn.cursor()
+            for sql in sqls:
+                cur.execute(sql)
+                logger.info(f"OK: {sql[:60].strip()}...")
+            cur.close()
+            conn.close()
             logger.info("Migrations concluidas com sucesso.")
         except Exception as e:
             logger.error(f"Erro nas migrations: {e}")
