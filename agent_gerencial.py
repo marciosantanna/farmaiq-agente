@@ -746,12 +746,23 @@ def main():
         if not AGENT_KEY:
             logger.error("AGENT_API_KEY nao configurado no .env")
             sys.exit(1)
-        logger.info(f"Chamando migrations via API: {CLOUD_URL}")
+        base = CLOUD_URL.rstrip('/')
+        logger.info(f"Acordando servidor Render (pode levar ~60s)...")
+        for tentativa in range(1, 4):
+            try:
+                r = requests.get(f"{base}/health", timeout=90)
+                if r.status_code < 500:
+                    logger.info("Servidor acordado.")
+                    break
+            except Exception:
+                pass
+            logger.info(f"Tentativa {tentativa}/3 de acordar servidor...")
+        logger.info("Executando migrations...")
         try:
             r = requests.post(
-                f"{CLOUD_URL.rstrip('/')}/api/admin/migrate",
+                f"{base}/api/admin/migrate",
                 headers={"X-Admin-Secret": AGENT_KEY},
-                timeout=30,
+                timeout=90,
             )
             if r.status_code == 200:
                 logger.info(f"Migrations OK: {r.json().get('mensagem', r.text)}")
