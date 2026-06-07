@@ -736,7 +736,21 @@ def main():
     parser.add_argument("--webhook", action="store_true", help="Servidor HTTP para trigger remoto")
     parser.add_argument("--dias",    type=int, default=None, help="Forcar N dias (ignora calculo automatico)")
     parser.add_argument("--reset",   action="store_true", help="Apagar historico local e fazer carga completa (180 dias)")
+    parser.add_argument("--migrate", action="store_true", help="Criar/atualizar tabelas no banco Neon e sair")
     args = parser.parse_args()
+
+    if args.migrate:
+        from backend.utils.database import postgres_connection
+        from backend.sync.schema import criar_tabelas_app
+        logger.info("Executando migrations no banco Neon...")
+        try:
+            with postgres_connection() as pg:
+                criar_tabelas_app(pg)
+            logger.info("Migrations concluidas com sucesso.")
+        except Exception as e:
+            logger.error(f"Erro nas migrations: {e}")
+            sys.exit(1)
+        sys.exit(0)
 
     if args.reset:
         if STATE_FILE.exists():
