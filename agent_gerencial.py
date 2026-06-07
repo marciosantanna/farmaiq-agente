@@ -746,9 +746,45 @@ def main():
         if not AGENT_KEY:
             logger.error("AGENT_API_KEY nao configurado no .env")
             sys.exit(1)
+        # Tenta conexao direta se DATABASE_URL estiver disponivel
+        db_url = os.getenv("DATABASE_URL", "")
+        if db_url:
+            import psycopg2
+            logger.info("Conectando diretamente ao banco via DATABASE_URL...")
+            sqls = [
+                """CREATE TABLE IF NOT EXISTS sync_contas_pagar (
+                    id BIGSERIAL PRIMARY KEY, filial_id INTEGER NOT NULL,
+                    cd_contas_pagar INTEGER NOT NULL, cd_distribuidor INTEGER,
+                    fornecedor TEXT, numero_nf TEXT, dt_nota DATE,
+                    dt_vencimento DATE NOT NULL, valor NUMERIC(12,2) DEFAULT 0,
+                    vl_saldo NUMERIC(12,2) DEFAULT 0, codigo_barras TEXT,
+                    banco TEXT, historico TEXT, pago BOOLEAN DEFAULT FALSE,
+                    pago_em TIMESTAMP, pago_por TEXT, synced_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE (filial_id, cd_contas_pagar))""",
+                "CREATE INDEX IF NOT EXISTS idx_sync_cp_filial_venc ON sync_contas_pagar (filial_id, dt_vencimento)",
+                "CREATE INDEX IF NOT EXISTS idx_sync_cp_pago ON sync_contas_pagar (filial_id, pago, dt_vencimento)",
+            ]
+            try:
+                conn = psycopg2.connect(db_url)
+                conn.autocommit = True
+                cur = conn.cursor()
+                for sql in sqls:
+                    cur.execute(sql)
+                cur.close()
+                conn.close()
+                logger.info("Migrations concluidas com sucesso.")
+            except Exception as e:
+                logger.error(f"Erro: {e}")
+                sys.exit(1)
+            sys.exit(0)
+
+        # Fallback: chama via API HTTP
+        if not CLOUD_URL or not AGENT_KEY:
+            logger.error("Configure DATABASE_URL ou CLOUD_API_URL+AGENT_API_KEY no .env")
+            sys.exit(1)
         base = CLOUD_URL.rstrip('/')
-        logger.info(f"Acordando servidor Render (pode levar ~60s)...")
-        for tentativa in range(1, 4):
+        logger.info("Acordando servidor Render (pode levar ~60s)...")
+        for _ in range(3):
             try:
                 r = requests.get(f"{base}/health", timeout=90)
                 if r.status_code < 500:
@@ -756,8 +792,7 @@ def main():
                     break
             except Exception:
                 pass
-            logger.info(f"Tentativa {tentativa}/3 de acordar servidor...")
-        logger.info("Executando migrations...")
+        logger.info("Executando migrations via API...")
         try:
             r = requests.post(
                 f"{base}/api/admin/migrate",
@@ -766,11 +801,15 @@ def main():
             )
             if r.status_code == 200:
                 logger.info(f"Migrations OK: {r.json().get('mensagem', r.text)}")
+            elif r.status_code == 404:
+                logger.error("Endpoint nao encontrado. Render ainda nao deployou o novo codigo.")
+                logger.error("Solucao: va ao painel Render e clique em 'Manual Deploy'.")
+                sys.exit(1)
             else:
                 logger.error(f"Erro {r.status_code}: {r.text}")
                 sys.exit(1)
         except Exception as e:
-            logger.error(f"Erro ao chamar migrate: {e}")
+            logger.error(f"Erro: {e}")
             sys.exit(1)
         sys.exit(0)
 
