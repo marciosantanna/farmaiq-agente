@@ -202,7 +202,8 @@ def sincronizar(dias_vendas: int = 180):
     hoje = date.today()
     data_inicio_vendas = hoje - timedelta(days=dias_vendas)
     data_inicio_compras = hoje - timedelta(days=90)
-    data_inicio_30d = hoje - timedelta(days=30)
+    data_inicio_30d  = hoje - timedelta(days=30)
+    data_inicio_180d = hoje - timedelta(days=180)
 
     # Notificar cloud que sync iniciou
     post("/api/sync/status", {
@@ -481,11 +482,11 @@ def sincronizar(dias_vendas: int = 180):
                 logger.error(f"Erro ao ler transferencias: {e}")
                 erros += 1
 
-            # ── 5. RECEBIMENTOS (ultimos 30 dias) ───────────────────────────
+            # ── 5. RECEBIMENTOS (ultimos 180 dias) ──────────────────────────
             logger.info("Lendo recebimentos...")
             try:
                 receb_raw = reader.ler_recebimentos_periodo(
-                    data_inicio=data_inicio_30d,
+                    data_inicio=data_inicio_180d,
                     data_fim=hoje,
                     filial_id=FILIAL_ID,
                 )
