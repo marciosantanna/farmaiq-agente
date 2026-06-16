@@ -482,7 +482,7 @@ def sincronizar(dias_vendas: int = 180):
                 logger.error(f"Erro ao ler transferencias: {e}")
                 erros += 1
 
-            # ── 5. RECEBIMENTOS (ultimos 180 dias) ──────────────────────────
+            # ── 5. RECEBIMENTOS (ultimos 180 dias, em lotes de 30d) ─────────
             logger.info("Lendo recebimentos...")
             try:
                 receb_raw = reader.ler_recebimentos_periodo(
@@ -505,10 +505,23 @@ def sincronizar(dias_vendas: int = 180):
                         "valor_total":     float(r.valor_total or 0),
                         "fornecedor":      str(r.fornecedor or ""),
                     })
-                if not post("/api/sync/recebimentos", {"filial_id": FILIAL_ID, "recebimentos": receb}):
+                # Envia em lotes de 500 para evitar timeout no servidor
+                LOTE = 500
+                total_enviados = 0
+                falhou = False
+                for i in range(0, max(len(receb), 1), LOTE):
+                    lote = receb[i:i + LOTE]
+                    if not lote:
+                        break
+                    if not post("/api/sync/recebimentos", {"filial_id": FILIAL_ID, "recebimentos": lote}):
+                        falhou = True
+                        break
+                    total_enviados += len(lote)
+                    logger.info(f"Recebimentos lote {i//LOTE+1}: {len(lote)} itens (total {total_enviados})")
+                if falhou:
                     erros += 1
                 else:
-                    logger.info(f"Recebimentos enviados: {len(receb)}")
+                    logger.info(f"Recebimentos concluidos: {total_enviados} itens")
             except Exception as e:
                 logger.error(f"Erro ao ler recebimentos: {e}")
                 erros += 1
