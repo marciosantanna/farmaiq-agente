@@ -505,19 +505,26 @@ def sincronizar(dias_vendas: int = 180):
                         "valor_total":     float(r.valor_total or 0),
                         "fornecedor":      str(r.fornecedor or ""),
                     })
-                # Envia em lotes de 500 para evitar timeout no servidor
+                # Envia em lotes de 500 — lote_idx=0 dispara o DELETE no servidor
                 LOTE = 500
                 total_enviados = 0
                 falhou = False
+                total_lotes = max(1, (len(receb) + LOTE - 1) // LOTE)
                 for i in range(0, max(len(receb), 1), LOTE):
                     lote = receb[i:i + LOTE]
                     if not lote:
                         break
-                    if not post("/api/sync/recebimentos", {"filial_id": FILIAL_ID, "recebimentos": lote}):
+                    lote_idx = i // LOTE
+                    if not post("/api/sync/recebimentos", {
+                        "filial_id": FILIAL_ID,
+                        "recebimentos": lote,
+                        "lote_idx": lote_idx,
+                        "total_lotes": total_lotes,
+                    }):
                         falhou = True
                         break
                     total_enviados += len(lote)
-                    logger.info(f"Recebimentos lote {i//LOTE+1}: {len(lote)} itens (total {total_enviados})")
+                    logger.info(f"Recebimentos lote {lote_idx+1}/{total_lotes}: {len(lote)} itens (total {total_enviados})")
                 if falhou:
                     erros += 1
                 else:
