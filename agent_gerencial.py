@@ -505,7 +505,7 @@ def sincronizar(dias_vendas: int = 180):
                         "valor_total":     float(r.valor_total or 0),
                         "fornecedor":      str(r.fornecedor or ""),
                     })
-                # Envia em lotes de 500 — lote_idx=0 dispara o DELETE no servidor
+                # Envia em lotes de 500 (servidor faz UPSERT puro, sem DELETE)
                 LOTE = 500
                 total_enviados = 0
                 falhou = False
