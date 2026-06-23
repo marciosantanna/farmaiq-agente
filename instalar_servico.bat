@@ -1,5 +1,6 @@
 @echo off
 setlocal
+cd /d "%~dp0"
 echo ============================================
 echo  Instalar Agent Gerencial como Servico Windows
 echo ============================================
@@ -9,24 +10,41 @@ echo (botao direito - Executar como administrador).
 echo.
 echo Requer o NSSM (Non-Sucking Service Manager):
 echo   1. Baixe em https://nssm.cc/download (pacote win64)
-echo   2. Extraia nssm.exe e coloque NESTA PASTA (agente_local)
+echo   2. Extraia nssm.exe e coloque NESTA PASTA (a mesma do agent_gerencial.py)
 echo   3. Rode este script novamente
 echo.
 
-if not exist nssm.exe (
-    echo ERRO: nssm.exe nao encontrado nesta pasta.
+set PASTA=%~dp0
+
+if not exist "%PASTA%nssm.exe" (
+    echo ERRO: nssm.exe nao encontrado em %PASTA%
     pause
     exit /b 1
 )
 
 set SERVICO=GerencialAgent
-set PASTA=%~dp0
 
-for /f "delims=" %%P in ('where pythonw 2^>nul') do set PYTHONW=%%P
-if "%PYTHONW%"=="" (
-    echo ERRO: pythonw.exe nao encontrado no PATH. Instale o Python e tente novamente.
+rem Resolve o caminho REAL do python.exe (evita o stub da Microsoft Store
+rem em WindowsApps, que nao funciona quando o servico roda como SYSTEM)
+for /f "delims=" %%P in ('python -c "import sys;print(sys.executable)" 2^>nul') do set PYTHON_REAL=%%P
+if "%PYTHON_REAL%"=="" (
+    echo ERRO: nao foi possivel localizar o Python instalado.
     pause
     exit /b 1
+)
+
+for %%F in ("%PYTHON_REAL%") do set PYDIR=%%~dpF
+set PYTHONW=%PYDIR%pythonw.exe
+if not exist "%PYTHONW%" set PYTHONW=%PYTHON_REAL%
+
+echo Python real encontrado: %PYTHONW%
+
+rem Se o servico ja existe (ex: reinstalacao apos correcao), remove antes
+nssm status %SERVICO% >nul 2>nul
+if not errorlevel 1 (
+    echo Servico existente encontrado - removendo para reinstalar...
+    nssm stop %SERVICO% >nul 2>nul
+    nssm remove %SERVICO% confirm >nul 2>nul
 )
 
 nssm install %SERVICO% "%PYTHONW%" "%PASTA%agent_gerencial.py --loop"
