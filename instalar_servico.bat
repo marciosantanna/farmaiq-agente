@@ -48,7 +48,7 @@ if not errorlevel 1 (
 )
 
 nssm install %SERVICO% "%PYTHONW%" "%PASTA%agent_gerencial.py --loop"
-nssm set %SERVICO% AppDirectory "%PASTA%"
+nssm set %SERVICO% AppDirectory "%PASTA:~0,-1%"
 nssm set %SERVICO% DisplayName "Agent Gerencial - Sincronizador Farmasoft"
 nssm set %SERVICO% Description "Sincroniza dados do Farmasoft para o sistema gerencial na nuvem. NAO FINALIZAR - parar exige administrador."
 nssm set %SERVICO% Start SERVICE_AUTO_START
