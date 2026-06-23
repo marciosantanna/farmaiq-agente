@@ -1,4 +1,5 @@
 @echo off
+cd /d "%~dp0"
 echo Execute como Administrador.
 echo.
 set SERVICO=GerencialAgent
