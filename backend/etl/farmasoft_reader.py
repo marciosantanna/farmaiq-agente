@@ -1693,8 +1693,27 @@ class FarmasoftReader:
     def ler_contas_pagar(self, data_inicio: date, filial_id: int = 1) -> List[Dict]:
         """Le CONTAS_PAGAR do Farmasoft a partir de data_inicio (somente leitura)."""
         conn = self._get_connection()
-        # Tenta com PARCELA; se coluna nao existir, tenta sem
-        for sql in [
+        # Tenta variantes com campos opcionais (PARCELA, LINHA_DIGITAVEL, BANCO).
+        # Firebird nao suporta COALESCE em colunas que nao existem, entao
+        # cada variante adiciona um campo e cai no fallback se a coluna faltar.
+        base_select = (
+            "SELECT cp.CD_CONTAS_PAGAR, cp.CD_DISTRIBUIDOR, cp.NUMERO_NOTA, cp.DT_NOTA, "
+            "cp.DT_VENCIMENTO, cp.VALOR, cp.VL_SALDO, cp.HISTORICO, "
+            "d.NOME as FORNECEDOR "
+            "FROM CONTAS_PAGAR cp "
+            "LEFT JOIN DISTRIBUIDORES d ON d.CD_DISTRIBUIDOR = cp.CD_DISTRIBUIDOR "
+            "WHERE cp.CD_FILIAL = ? AND cp.DT_VENCIMENTO >= ? "
+            "ORDER BY cp.DT_VENCIMENTO"
+        )
+        tentativas = [
+            ("SELECT cp.CD_CONTAS_PAGAR, cp.CD_DISTRIBUIDOR, cp.NUMERO_NOTA, cp.DT_NOTA, "
+             "cp.DT_VENCIMENTO, cp.VALOR, cp.VL_SALDO, cp.HISTORICO, cp.PARCELA, "
+             "cp.LINHA_DIGITAVEL, cp.BANCO, "
+             "d.NOME as FORNECEDOR "
+             "FROM CONTAS_PAGAR cp "
+             "LEFT JOIN DISTRIBUIDORES d ON d.CD_DISTRIBUIDOR = cp.CD_DISTRIBUIDOR "
+             "WHERE cp.CD_FILIAL = ? AND cp.DT_VENCIMENTO >= ? "
+             "ORDER BY cp.DT_VENCIMENTO"),
             ("SELECT cp.CD_CONTAS_PAGAR, cp.CD_DISTRIBUIDOR, cp.NUMERO_NOTA, cp.DT_NOTA, "
              "cp.DT_VENCIMENTO, cp.VALOR, cp.VL_SALDO, cp.HISTORICO, cp.PARCELA, "
              "d.NOME as FORNECEDOR "
@@ -1702,14 +1721,10 @@ class FarmasoftReader:
              "LEFT JOIN DISTRIBUIDORES d ON d.CD_DISTRIBUIDOR = cp.CD_DISTRIBUIDOR "
              "WHERE cp.CD_FILIAL = ? AND cp.DT_VENCIMENTO >= ? "
              "ORDER BY cp.DT_VENCIMENTO"),
-            ("SELECT cp.CD_CONTAS_PAGAR, cp.CD_DISTRIBUIDOR, cp.NUMERO_NOTA, cp.DT_NOTA, "
-             "cp.DT_VENCIMENTO, cp.VALOR, cp.VL_SALDO, cp.HISTORICO, "
-             "d.NOME as FORNECEDOR "
-             "FROM CONTAS_PAGAR cp "
-             "LEFT JOIN DISTRIBUIDORES d ON d.CD_DISTRIBUIDOR = cp.CD_DISTRIBUIDOR "
-             "WHERE cp.CD_FILIAL = ? AND cp.DT_VENCIMENTO >= ? "
-             "ORDER BY cp.DT_VENCIMENTO"),
-        ]:
+            base_select,
+        ]
+        rows = None
+        for sql in tentativas:
             try:
                 rows = conn.executar_select(sql, (filial_id, data_inicio))
                 break
@@ -1730,6 +1745,8 @@ class FarmasoftReader:
                 "vl_saldo":         float(r["VL_SALDO"] or 0),
                 "historico":        (r.get("HISTORICO") or "").strip(),
                 "parcela":          str(r["PARCELA"]).strip() if r.get("PARCELA") else "",
+                "codigo_barras":    (r.get("LINHA_DIGITAVEL") or "").strip(),
+                "banco":            (r.get("BANCO") or "").strip(),
             })
         return resultado
 
