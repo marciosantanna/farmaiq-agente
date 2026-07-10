@@ -950,6 +950,8 @@ class FarmasoftReader:
                 ic.QUANTIDADE,
                 ic.VL_UNITARIO,
                 ic.VL_TOTAL,
+                c.VL_TOTALPRODUTOS,
+                c.TOTAL_NOTA,
                 ic.LABORATORIO,
                 p.PRINCIPIOATIVO
             FROM ITENS_COMPRA ic
@@ -970,6 +972,18 @@ class FarmasoftReader:
 
             recebimentos = []
             for r in results:
+                vl_bruto = float(r["VL_TOTAL"] or 0)
+                vl_total_prod = float(r["VL_TOTALPRODUTOS"] or 0)
+                total_nota = float(r["TOTAL_NOTA"] or 0)
+                # Aplica proporcao TOTAL_NOTA/VL_TOTALPRODUTOS para refletir
+                # valor real pago (elimina distorcao de bonificacao)
+                if vl_total_prod > 0 and total_nota > 0:
+                    fator = total_nota / vl_total_prod
+                    vl_ajustado = vl_bruto * fator
+                else:
+                    vl_ajustado = vl_bruto
+                qtd = int(r["QUANTIDADE"] or 0)
+                vl_unit_ajustado = vl_ajustado / qtd if qtd > 0 else float(r["VL_UNITARIO"] or 0)
                 recebimentos.append(RecebimentoProduto(
                     cd_compras=int(r["CD_COMPRAS"]),
                     numero_nf=str(r.get("NUMERO_NF") or ""),
@@ -977,9 +991,9 @@ class FarmasoftReader:
                     fornecedor=(r.get("NOME_FORNECEDOR") or "").strip(),
                     id_produto=int(r["ID_PRODUTO"]) if r["ID_PRODUTO"] else 0,
                     descricao=(r.get("DESCRICAO") or "").strip(),
-                    quantidade=int(r["QUANTIDADE"] or 0),
-                    valor_unitario=float(r["VL_UNITARIO"] or 0),
-                    valor_total=float(r["VL_TOTAL"] or 0),
+                    quantidade=qtd,
+                    valor_unitario=round(vl_unit_ajustado, 4),
+                    valor_total=round(vl_ajustado, 2),
                     laboratorio=(r.get("LABORATORIO") or "").strip(),
                     principio_ativo=(r.get("PRINCIPIOATIVO") or "").strip(),
                 ))
