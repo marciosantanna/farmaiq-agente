@@ -81,6 +81,7 @@ def _loop_duckdns():
         time.sleep(DUCKDNS_INTERVALO)
 
 STATE_FILE  = Path(__file__).resolve().parent / "sync_state.json"
+PID_FILE    = Path(__file__).resolve().parent / "agent.pid"
 DIAS_PRIMEIRA_CARGA = 180
 DIAS_MAX_INCREMENTAL = 5   # maximo de dias no sync incremental
 DIAS_MARGEM = 2            # margem de seguranca (reprocessa N dias atras)
@@ -130,10 +131,11 @@ def calcular_dias_sync() -> int:
             state = json.loads(STATE_FILE.read_text())
             ultimo = datetime.fromisoformat(state.get("ultimo_sync", ""))
             agora  = datetime.now()
-            if ultimo > agora:
+            delta_s = (ultimo - agora).total_seconds()
+            if delta_s > 600:  # mais de 10 minutos no futuro = relogio estava incorreto
                 logger.warning(
-                    f"Ultimo sync ({ultimo.strftime('%d/%m/%Y %H:%M')}) esta no futuro "
-                    f"- relogio local estava incorreto. Forcando recarga completa."
+                    f"Ultimo sync ({ultimo.strftime('%d/%m/%Y %H:%M')}) esta {int(delta_s/60)}min "
+                    f"no futuro - relogio local estava incorreto. Forcando recarga completa."
                 )
                 raise ValueError("sync no futuro")
             dias_passados = (agora - ultimo).days + DIAS_MARGEM
@@ -798,6 +800,33 @@ class WebhookHandler(BaseHTTPRequestHandler):
         logger.info("Webhook: " + fmt % args)
 
 
+def _adquirir_pid_lock() -> bool:
+    """
+    Impede que duas instancias do agente rodem ao mesmo tempo.
+    Retorna True se pode continuar, False se outra instancia ja esta ativa.
+    """
+    pid_atual = os.getpid()
+    if PID_FILE.exists():
+        try:
+            pid_antigo = int(PID_FILE.read_text().strip())
+            if pid_antigo != pid_atual:
+                # Verifica se o processo ainda existe (Windows)
+                import ctypes
+                PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+                handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid_antigo)
+                if handle:
+                    ctypes.windll.kernel32.CloseHandle(handle)
+                    logger.warning(
+                        f"Outra instancia do agente ja esta rodando (PID {pid_antigo}). "
+                        f"Encerrando esta instancia (PID {pid_atual})."
+                    )
+                    return False
+        except Exception:
+            pass  # PID invalido ou processo morto — pode continuar
+    PID_FILE.write_text(str(pid_atual))
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(description="Agent Gerencial - Sync Farmasoft -> Cloud")
     parser.add_argument("--loop",    action="store_true", help="Rodar em loop continuo")
@@ -887,6 +916,11 @@ def main():
         logger.info("Historico de sync apagado. Proxima execucao fara carga completa.")
         if not args.loop and not args.webhook:
             sys.exit(0)
+
+    # Impede segunda instancia (loop e webhook sao de longa duracao)
+    if args.loop or args.webhook:
+        if not _adquirir_pid_lock():
+            sys.exit(1)
 
     if args.webhook:
         logger.info(f"Webhook ativo na porta {WEBHOOK_PORT} | POST /sync?key=***")
