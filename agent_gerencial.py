@@ -81,73 +81,61 @@ def _loop_duckdns():
         time.sleep(DUCKDNS_INTERVALO)
 
 STATE_FILE  = Path(__file__).resolve().parent / "sync_state.json"
-PID_FILE    = Path(__file__).resolve().parent / "agent.pid"
 DIAS_PRIMEIRA_CARGA = 180
 DIAS_MAX_INCREMENTAL = 5   # maximo de dias no sync incremental
 DIAS_MARGEM = 2            # margem de seguranca (reprocessa N dias atras)
 
 
-_hora_universal_cache: datetime | None = None
+_data_servidor_cache: date | None = None
 
 
-def _obter_hora_universal(forcar: bool = False) -> datetime:
+def _data_hoje_servidor() -> date:
     """
-    Fonte de tempo universal para todo o ciclo de sync.
-    Consulta /api/server-time (PostgreSQL Render) uma vez por ciclo e guarda em cache.
-    Assim o relogio local do PC nunca interfere em nenhuma decisao de data/hora.
-    Fallback: datetime.now() apenas se a API estiver indisponivel.
+    Retorna a data atual do servidor cloud (PostgreSQL).
+    Protege contra relogio local incorreto no PC da farmacia.
+    Fallback para date.today() se API indisponivel.
     """
-    global _hora_universal_cache
-    if _hora_universal_cache is not None and not forcar:
-        return _hora_universal_cache
+    global _data_servidor_cache
+    if _data_servidor_cache is not None:
+        return _data_servidor_cache
     try:
         r = requests.get(
             f"{CLOUD_URL.rstrip('/')}/api/server-time",
             timeout=5,
         )
         if r.status_code == 200:
-            dados  = r.json()
-            dt_str = dados.get("timestamp", "")
-            tz_off = dados.get("tz_offset", -3)
-            dt     = datetime.fromisoformat(dt_str.split("+")[0].split("Z")[0])
-            local  = datetime.now()
-            delta_m = abs((dt - local).total_seconds() / 60)
-            if delta_m > 5:
+            data_banco = date.fromisoformat(r.json()["date"])
+            data_local = date.today()
+            delta = abs((data_banco - data_local).days)
+            if delta > 0:
                 logger.warning(
-                    f"RELOGIO PC DIVERGE {delta_m:.0f}min do servidor "
-                    f"(pc={local.strftime('%H:%M')} servidor={dt.strftime('%H:%M')} "
-                    f"UTC{tz_off:+d}). Usando hora do servidor para todo o sync."
+                    f"RELOGIO LOCAL INCORRETO: local={data_local} servidor={data_banco} "
+                    f"(diferenca de {delta} dia(s)). Usando data do servidor."
                 )
-            _hora_universal_cache = dt
-            return dt
+            _data_servidor_cache = data_banco
+            return data_banco
     except Exception as e:
-        logger.debug(f"server-time indisponivel ({e}) - usando relogio local")
-    _hora_universal_cache = datetime.now()
-    return _hora_universal_cache
-
-
-def _data_hoje() -> date:
-    return _obter_hora_universal().date()
+        logger.debug(f"server-time indisponivel ({e}), usando relogio local")
+    return date.today()
 
 
 def calcular_dias_sync() -> int:
     """
-    Retorna quantos dias sincronizar.
-    Usa hora universal (servidor online) para comparar com ultimo_sync gravado.
-    Assim o relogio local nunca interfere no calculo.
+    Retorna quantos dias sincronizar:
+    - Sem historico local: 180 dias (carga completa)
+    - Com historico: dias desde ultimo sync + margem (minimo 2, maximo 5)
     """
     try:
         if STATE_FILE.exists():
-            state  = json.loads(STATE_FILE.read_text())
+            state = json.loads(STATE_FILE.read_text())
             ultimo = datetime.fromisoformat(state.get("ultimo_sync", ""))
-            agora  = _obter_hora_universal()           # hora confiavel do servidor
-            delta_s = (ultimo - agora).total_seconds()
-            if delta_s > 600:                          # > 10min no futuro = relogio PC divergente
+            agora  = datetime.now()
+            if ultimo > agora:
                 logger.warning(
-                    f"ultimo_sync ({ultimo.strftime('%d/%m/%Y %H:%M')}) esta {int(delta_s/60)}min "
-                    f"no futuro (relogio PC atrasado?). Sync incremental conservador ({DIAS_MARGEM}d)."
+                    f"Ultimo sync ({ultimo.strftime('%d/%m/%Y %H:%M')}) esta no futuro "
+                    f"- relogio local estava incorreto. Forcando recarga completa."
                 )
-                return DIAS_MARGEM                     # seguro: apenas re-sincroniza dias recentes
+                raise ValueError("sync no futuro")
             dias_passados = (agora - ultimo).days + DIAS_MARGEM
             dias = max(DIAS_MARGEM, min(dias_passados, DIAS_MAX_INCREMENTAL))
             logger.info(f"Sync incremental: {dias} dias (ultimo sync: {ultimo.strftime('%d/%m %H:%M')})")
@@ -159,31 +147,30 @@ def calcular_dias_sync() -> int:
 
 
 def salvar_estado_sync(incluiu_produtos: bool = False):
-    """Grava timestamp do sync usando hora universal (servidor), nao o relogio local."""
+    """Grava timestamp do sync bem-sucedido para uso na proxima execucao."""
     try:
-        agora_universal = _obter_hora_universal().isoformat()
         state = {}
         if STATE_FILE.exists():
             state = json.loads(STATE_FILE.read_text())
-        state["ultimo_sync"] = agora_universal
+        state["ultimo_sync"] = datetime.now().isoformat()
         if incluiu_produtos:
-            state["ultimo_sync_produtos"] = agora_universal
+            state["ultimo_sync_produtos"] = datetime.now().isoformat()
         STATE_FILE.write_text(json.dumps(state))
     except Exception as e:
         logger.warning(f"Nao foi possivel salvar sync_state.json: {e}")
 
 
 def deve_sincronizar_produtos() -> bool:
-    """Produtos (metadata completa) so sincronizam uma vez a cada 6 horas."""
+    """Produtos (metadata completa) so sincronizam uma vez por dia."""
     try:
         if STATE_FILE.exists():
             state = json.loads(STATE_FILE.read_text())
             ultimo = state.get("ultimo_sync_produtos")
             if ultimo:
-                agora    = _obter_hora_universal()
+                agora = datetime.now()
                 dt_ultimo = datetime.fromisoformat(ultimo)
                 if dt_ultimo > agora:
-                    logger.warning("ultimo_sync_produtos no futuro - forcando resync de metadata.")
+                    logger.warning("Ultimo sync produtos esta no futuro - forcando resync.")
                     return True
                 horas = (agora - dt_ultimo).total_seconds() / 3600
                 if horas < 6:
@@ -257,8 +244,13 @@ def sincronizar(dias_vendas: int = 180):
         logger.error(f"Erro ao importar backend: {e}")
         return False
 
-    global _hora_universal_cache
-    _hora_universal_cache = None   # limpa para renovar neste ciclo
+    global _data_servidor_cache
+    _data_servidor_cache = None  # limpa cache para obter data atualizada a cada sync
+    hoje = _data_hoje_servidor()
+    data_inicio_vendas = hoje - timedelta(days=dias_vendas)
+    data_inicio_compras = hoje - timedelta(days=90)
+    data_inicio_30d  = hoje - timedelta(days=30)
+    data_inicio_180d = hoje - timedelta(days=180)
 
     # Notificar cloud que sync iniciou
     post("/api/sync/status", {
@@ -273,35 +265,6 @@ def sincronizar(dias_vendas: int = 180):
     try:
         with farmasoft_connection() as conn:
             reader = FarmasoftReader(conn)
-
-            # ── HORA DE REFERENCIA: Farmasoft e sempre correto (obrigacao legal NF) ──
-            try:
-                ts_rows = conn.executar_select(
-                    "SELECT CAST(CURRENT_TIMESTAMP AS TIMESTAMP) AS TS FROM RDB$DATABASE"
-                )
-                if ts_rows and ts_rows[0].get("TS"):
-                    ts = ts_rows[0]["TS"]
-                    dt_farma = ts if isinstance(ts, datetime) else datetime.fromisoformat(str(ts))
-                    delta_m = abs((dt_farma - datetime.now()).total_seconds() / 60)
-                    if delta_m > 2:
-                        logger.warning(
-                            f"RELOGIO PC DIVERGE {delta_m:.0f}min do Farmasoft "
-                            f"(pc={datetime.now().strftime('%H:%M')} farmasoft={dt_farma.strftime('%H:%M')}). "
-                            f"Usando hora do Farmasoft como referencia."
-                        )
-                    _hora_universal_cache = dt_farma
-                    logger.info(f"Hora referencia: Farmasoft {dt_farma.strftime('%d/%m/%Y %H:%M:%S')}")
-            except Exception as e:
-                logger.debug(f"Hora Farmasoft indisponivel ({e}) - usando fallback")
-                # fallback: tenta servidor cloud (ja pode estar acordado apos _ping_api)
-                _hora_universal_cache = None
-                _obter_hora_universal()
-
-            hoje = _hora_universal_cache.date() if _hora_universal_cache else date.today()
-            data_inicio_vendas = hoje - timedelta(days=dias_vendas)
-            data_inicio_compras = hoje - timedelta(days=90)
-            data_inicio_30d  = hoje - timedelta(days=30)
-            data_inicio_180d = hoje - timedelta(days=180)
 
             # ── 1. PRODUTOS ──────────────────────────────────────────────────
             sync_completo = deve_sincronizar_produtos()
@@ -835,33 +798,6 @@ class WebhookHandler(BaseHTTPRequestHandler):
         logger.info("Webhook: " + fmt % args)
 
 
-def _adquirir_pid_lock() -> bool:
-    """
-    Impede que duas instancias do agente rodem ao mesmo tempo.
-    Retorna True se pode continuar, False se outra instancia ja esta ativa.
-    """
-    pid_atual = os.getpid()
-    if PID_FILE.exists():
-        try:
-            pid_antigo = int(PID_FILE.read_text().strip())
-            if pid_antigo != pid_atual:
-                # Verifica se o processo ainda existe (Windows)
-                import ctypes
-                PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-                handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid_antigo)
-                if handle:
-                    ctypes.windll.kernel32.CloseHandle(handle)
-                    logger.warning(
-                        f"Outra instancia do agente ja esta rodando (PID {pid_antigo}). "
-                        f"Encerrando esta instancia (PID {pid_atual})."
-                    )
-                    return False
-        except Exception:
-            pass  # PID invalido ou processo morto — pode continuar
-    PID_FILE.write_text(str(pid_atual))
-    return True
-
-
 def main():
     parser = argparse.ArgumentParser(description="Agent Gerencial - Sync Farmasoft -> Cloud")
     parser.add_argument("--loop",    action="store_true", help="Rodar em loop continuo")
@@ -951,11 +887,6 @@ def main():
         logger.info("Historico de sync apagado. Proxima execucao fara carga completa.")
         if not args.loop and not args.webhook:
             sys.exit(0)
-
-    # Impede segunda instancia (loop e webhook sao de longa duracao)
-    if args.loop or args.webhook:
-        if not _adquirir_pid_lock():
-            sys.exit(1)
 
     if args.webhook:
         logger.info(f"Webhook ativo na porta {WEBHOOK_PORT} | POST /sync?key=***")
