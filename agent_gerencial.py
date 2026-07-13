@@ -258,12 +258,7 @@ def sincronizar(dias_vendas: int = 180):
         return False
 
     global _hora_universal_cache
-    _hora_universal_cache = None          # renova a hora universal a cada ciclo de sync
-    hoje = _data_hoje()                   # data do servidor online (imune ao relogio do PC)
-    data_inicio_vendas = hoje - timedelta(days=dias_vendas)
-    data_inicio_compras = hoje - timedelta(days=90)
-    data_inicio_30d  = hoje - timedelta(days=30)
-    data_inicio_180d = hoje - timedelta(days=180)
+    _hora_universal_cache = None   # limpa para renovar neste ciclo
 
     # Notificar cloud que sync iniciou
     post("/api/sync/status", {
@@ -278,6 +273,35 @@ def sincronizar(dias_vendas: int = 180):
     try:
         with farmasoft_connection() as conn:
             reader = FarmasoftReader(conn)
+
+            # ── HORA DE REFERENCIA: Farmasoft e sempre correto (obrigacao legal NF) ──
+            try:
+                ts_rows = conn.executar_select(
+                    "SELECT CAST(CURRENT_TIMESTAMP AS TIMESTAMP) AS TS FROM RDB$DATABASE"
+                )
+                if ts_rows and ts_rows[0].get("TS"):
+                    ts = ts_rows[0]["TS"]
+                    dt_farma = ts if isinstance(ts, datetime) else datetime.fromisoformat(str(ts))
+                    delta_m = abs((dt_farma - datetime.now()).total_seconds() / 60)
+                    if delta_m > 2:
+                        logger.warning(
+                            f"RELOGIO PC DIVERGE {delta_m:.0f}min do Farmasoft "
+                            f"(pc={datetime.now().strftime('%H:%M')} farmasoft={dt_farma.strftime('%H:%M')}). "
+                            f"Usando hora do Farmasoft como referencia."
+                        )
+                    _hora_universal_cache = dt_farma
+                    logger.info(f"Hora referencia: Farmasoft {dt_farma.strftime('%d/%m/%Y %H:%M:%S')}")
+            except Exception as e:
+                logger.debug(f"Hora Farmasoft indisponivel ({e}) - usando fallback")
+                # fallback: tenta servidor cloud (ja pode estar acordado apos _ping_api)
+                _hora_universal_cache = None
+                _obter_hora_universal()
+
+            hoje = _hora_universal_cache.date() if _hora_universal_cache else date.today()
+            data_inicio_vendas = hoje - timedelta(days=dias_vendas)
+            data_inicio_compras = hoje - timedelta(days=90)
+            data_inicio_30d  = hoje - timedelta(days=30)
+            data_inicio_180d = hoje - timedelta(days=180)
 
             # ── 1. PRODUTOS ──────────────────────────────────────────────────
             sync_completo = deve_sincronizar_produtos()
