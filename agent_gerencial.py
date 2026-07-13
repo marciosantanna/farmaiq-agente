@@ -86,6 +86,39 @@ DIAS_MAX_INCREMENTAL = 5   # maximo de dias no sync incremental
 DIAS_MARGEM = 2            # margem de seguranca (reprocessa N dias atras)
 
 
+_data_servidor_cache: date | None = None
+
+
+def _data_hoje_servidor() -> date:
+    """
+    Retorna a data atual do servidor cloud (PostgreSQL).
+    Protege contra relogio local incorreto no PC da farmacia.
+    Fallback para date.today() se API indisponivel.
+    """
+    global _data_servidor_cache
+    if _data_servidor_cache is not None:
+        return _data_servidor_cache
+    try:
+        r = requests.get(
+            f"{CLOUD_URL.rstrip('/')}/api/server-time",
+            timeout=5,
+        )
+        if r.status_code == 200:
+            data_banco = date.fromisoformat(r.json()["date"])
+            data_local = date.today()
+            delta = abs((data_banco - data_local).days)
+            if delta > 0:
+                logger.warning(
+                    f"RELOGIO LOCAL INCORRETO: local={data_local} servidor={data_banco} "
+                    f"(diferenca de {delta} dia(s)). Usando data do servidor."
+                )
+            _data_servidor_cache = data_banco
+            return data_banco
+    except Exception as e:
+        logger.debug(f"server-time indisponivel ({e}), usando relogio local")
+    return date.today()
+
+
 def calcular_dias_sync() -> int:
     """
     Retorna quantos dias sincronizar:
@@ -96,7 +129,14 @@ def calcular_dias_sync() -> int:
         if STATE_FILE.exists():
             state = json.loads(STATE_FILE.read_text())
             ultimo = datetime.fromisoformat(state.get("ultimo_sync", ""))
-            dias_passados = (datetime.now() - ultimo).days + DIAS_MARGEM
+            agora  = datetime.now()
+            if ultimo > agora:
+                logger.warning(
+                    f"Ultimo sync ({ultimo.strftime('%d/%m/%Y %H:%M')}) esta no futuro "
+                    f"- relogio local estava incorreto. Forcando recarga completa."
+                )
+                raise ValueError("sync no futuro")
+            dias_passados = (agora - ultimo).days + DIAS_MARGEM
             dias = max(DIAS_MARGEM, min(dias_passados, DIAS_MAX_INCREMENTAL))
             logger.info(f"Sync incremental: {dias} dias (ultimo sync: {ultimo.strftime('%d/%m %H:%M')})")
             return dias
@@ -127,7 +167,12 @@ def deve_sincronizar_produtos() -> bool:
             state = json.loads(STATE_FILE.read_text())
             ultimo = state.get("ultimo_sync_produtos")
             if ultimo:
-                horas = (datetime.now() - datetime.fromisoformat(ultimo)).total_seconds() / 3600
+                agora = datetime.now()
+                dt_ultimo = datetime.fromisoformat(ultimo)
+                if dt_ultimo > agora:
+                    logger.warning("Ultimo sync produtos esta no futuro - forcando resync.")
+                    return True
+                horas = (agora - dt_ultimo).total_seconds() / 3600
                 if horas < 6:
                     logger.info(f"Metadata produtos em cache ({horas:.1f}h) - usando sync rapido de estoque")
                     return False
@@ -199,7 +244,9 @@ def sincronizar(dias_vendas: int = 180):
         logger.error(f"Erro ao importar backend: {e}")
         return False
 
-    hoje = date.today()
+    global _data_servidor_cache
+    _data_servidor_cache = None  # limpa cache para obter data atualizada a cada sync
+    hoje = _data_hoje_servidor()
     data_inicio_vendas = hoje - timedelta(days=dias_vendas)
     data_inicio_compras = hoje - timedelta(days=90)
     data_inicio_30d  = hoje - timedelta(days=30)
