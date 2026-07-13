@@ -87,57 +87,66 @@ DIAS_MAX_INCREMENTAL = 5   # maximo de dias no sync incremental
 DIAS_MARGEM = 2            # margem de seguranca (reprocessa N dias atras)
 
 
-_data_servidor_cache: date | None = None
+_hora_universal_cache: datetime | None = None
 
 
-def _data_hoje_servidor() -> date:
+def _obter_hora_universal(forcar: bool = False) -> datetime:
     """
-    Retorna a data atual do servidor cloud (PostgreSQL).
-    Protege contra relogio local incorreto no PC da farmacia.
-    Fallback para date.today() se API indisponivel.
+    Fonte de tempo universal para todo o ciclo de sync.
+    Consulta /api/server-time (PostgreSQL Render) uma vez por ciclo e guarda em cache.
+    Assim o relogio local do PC nunca interfere em nenhuma decisao de data/hora.
+    Fallback: datetime.now() apenas se a API estiver indisponivel.
     """
-    global _data_servidor_cache
-    if _data_servidor_cache is not None:
-        return _data_servidor_cache
+    global _hora_universal_cache
+    if _hora_universal_cache is not None and not forcar:
+        return _hora_universal_cache
     try:
         r = requests.get(
             f"{CLOUD_URL.rstrip('/')}/api/server-time",
             timeout=5,
         )
         if r.status_code == 200:
-            data_banco = date.fromisoformat(r.json()["date"])
-            data_local = date.today()
-            delta = abs((data_banco - data_local).days)
-            if delta > 0:
+            dados   = r.json()
+            dt_str  = dados.get("timestamp", "")
+            dt      = datetime.fromisoformat(dt_str.split("+")[0].split("Z")[0])
+            local   = datetime.now()
+            delta_m = abs((dt - local).total_seconds() / 60)
+            if delta_m > 5:
                 logger.warning(
-                    f"RELOGIO LOCAL INCORRETO: local={data_local} servidor={data_banco} "
-                    f"(diferenca de {delta} dia(s)). Usando data do servidor."
+                    f"RELOGIO PC DIVERGE {delta_m:.0f}min do servidor "
+                    f"(pc={local.strftime('%H:%M')} servidor={dt.strftime('%H:%M')}). "
+                    f"Usando hora do servidor para todo o sync."
                 )
-            _data_servidor_cache = data_banco
-            return data_banco
+            _hora_universal_cache = dt
+            return dt
     except Exception as e:
-        logger.debug(f"server-time indisponivel ({e}), usando relogio local")
-    return date.today()
+        logger.debug(f"server-time indisponivel ({e}) - usando relogio local")
+    _hora_universal_cache = datetime.now()
+    return _hora_universal_cache
+
+
+def _data_hoje() -> date:
+    return _obter_hora_universal().date()
 
 
 def calcular_dias_sync() -> int:
     """
-    Retorna quantos dias sincronizar:
-    - Sem historico local: 180 dias (carga completa)
-    - Com historico: dias desde ultimo sync + margem (minimo 2, maximo 5)
+    Retorna quantos dias sincronizar.
+    Usa hora universal (servidor online) para comparar com ultimo_sync gravado.
+    Assim o relogio local nunca interfere no calculo.
     """
     try:
         if STATE_FILE.exists():
-            state = json.loads(STATE_FILE.read_text())
+            state  = json.loads(STATE_FILE.read_text())
             ultimo = datetime.fromisoformat(state.get("ultimo_sync", ""))
-            agora  = datetime.now()
+            agora  = _obter_hora_universal()           # hora confiavel do servidor
             delta_s = (ultimo - agora).total_seconds()
-            if delta_s > 600:  # mais de 10 minutos no futuro = relogio estava incorreto
+            if delta_s > 600:                          # > 10min no futuro = estado corrompido
                 logger.warning(
-                    f"Ultimo sync ({ultimo.strftime('%d/%m/%Y %H:%M')}) esta {int(delta_s/60)}min "
-                    f"no futuro - relogio local estava incorreto. Forcando recarga completa."
+                    f"ultimo_sync ({ultimo.strftime('%d/%m/%Y %H:%M')}) esta {int(delta_s/60)}min "
+                    f"no futuro (estado corrompido). Forcando recarga completa."
                 )
-                raise ValueError("sync no futuro")
+                raise ValueError("estado corrompido")
             dias_passados = (agora - ultimo).days + DIAS_MARGEM
             dias = max(DIAS_MARGEM, min(dias_passados, DIAS_MAX_INCREMENTAL))
             logger.info(f"Sync incremental: {dias} dias (ultimo sync: {ultimo.strftime('%d/%m %H:%M')})")
@@ -149,30 +158,31 @@ def calcular_dias_sync() -> int:
 
 
 def salvar_estado_sync(incluiu_produtos: bool = False):
-    """Grava timestamp do sync bem-sucedido para uso na proxima execucao."""
+    """Grava timestamp do sync usando hora universal (servidor), nao o relogio local."""
     try:
+        agora_universal = _obter_hora_universal().isoformat()
         state = {}
         if STATE_FILE.exists():
             state = json.loads(STATE_FILE.read_text())
-        state["ultimo_sync"] = datetime.now().isoformat()
+        state["ultimo_sync"] = agora_universal
         if incluiu_produtos:
-            state["ultimo_sync_produtos"] = datetime.now().isoformat()
+            state["ultimo_sync_produtos"] = agora_universal
         STATE_FILE.write_text(json.dumps(state))
     except Exception as e:
         logger.warning(f"Nao foi possivel salvar sync_state.json: {e}")
 
 
 def deve_sincronizar_produtos() -> bool:
-    """Produtos (metadata completa) so sincronizam uma vez por dia."""
+    """Produtos (metadata completa) so sincronizam uma vez a cada 6 horas."""
     try:
         if STATE_FILE.exists():
             state = json.loads(STATE_FILE.read_text())
             ultimo = state.get("ultimo_sync_produtos")
             if ultimo:
-                agora = datetime.now()
+                agora    = _obter_hora_universal()
                 dt_ultimo = datetime.fromisoformat(ultimo)
                 if dt_ultimo > agora:
-                    logger.warning("Ultimo sync produtos esta no futuro - forcando resync.")
+                    logger.warning("ultimo_sync_produtos no futuro - forcando resync de metadata.")
                     return True
                 horas = (agora - dt_ultimo).total_seconds() / 3600
                 if horas < 6:
@@ -246,9 +256,9 @@ def sincronizar(dias_vendas: int = 180):
         logger.error(f"Erro ao importar backend: {e}")
         return False
 
-    global _data_servidor_cache
-    _data_servidor_cache = None  # limpa cache para obter data atualizada a cada sync
-    hoje = _data_hoje_servidor()
+    global _hora_universal_cache
+    _hora_universal_cache = None          # renova a hora universal a cada ciclo de sync
+    hoje = _data_hoje()                   # data do servidor online (imune ao relogio do PC)
     data_inicio_vendas = hoje - timedelta(days=dias_vendas)
     data_inicio_compras = hoje - timedelta(days=90)
     data_inicio_30d  = hoje - timedelta(days=30)
