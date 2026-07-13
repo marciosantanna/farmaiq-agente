@@ -106,16 +106,17 @@ def _obter_hora_universal(forcar: bool = False) -> datetime:
             timeout=5,
         )
         if r.status_code == 200:
-            dados   = r.json()
-            dt_str  = dados.get("timestamp", "")
-            dt      = datetime.fromisoformat(dt_str.split("+")[0].split("Z")[0])
-            local   = datetime.now()
+            dados  = r.json()
+            dt_str = dados.get("timestamp", "")
+            tz_off = dados.get("tz_offset", -3)
+            dt     = datetime.fromisoformat(dt_str.split("+")[0].split("Z")[0])
+            local  = datetime.now()
             delta_m = abs((dt - local).total_seconds() / 60)
             if delta_m > 5:
                 logger.warning(
                     f"RELOGIO PC DIVERGE {delta_m:.0f}min do servidor "
-                    f"(pc={local.strftime('%H:%M')} servidor={dt.strftime('%H:%M')}). "
-                    f"Usando hora do servidor para todo o sync."
+                    f"(pc={local.strftime('%H:%M')} servidor={dt.strftime('%H:%M')} "
+                    f"UTC{tz_off:+d}). Usando hora do servidor para todo o sync."
                 )
             _hora_universal_cache = dt
             return dt
