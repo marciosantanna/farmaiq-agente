@@ -142,12 +142,12 @@ def calcular_dias_sync() -> int:
             ultimo = datetime.fromisoformat(state.get("ultimo_sync", ""))
             agora  = _obter_hora_universal()           # hora confiavel do servidor
             delta_s = (ultimo - agora).total_seconds()
-            if delta_s > 600:                          # > 10min no futuro = estado corrompido
+            if delta_s > 600:                          # > 10min no futuro = relogio PC divergente
                 logger.warning(
                     f"ultimo_sync ({ultimo.strftime('%d/%m/%Y %H:%M')}) esta {int(delta_s/60)}min "
-                    f"no futuro (estado corrompido). Forcando recarga completa."
+                    f"no futuro (relogio PC atrasado?). Sync incremental conservador ({DIAS_MARGEM}d)."
                 )
-                raise ValueError("estado corrompido")
+                return DIAS_MARGEM                     # seguro: apenas re-sincroniza dias recentes
             dias_passados = (agora - ultimo).days + DIAS_MARGEM
             dias = max(DIAS_MARGEM, min(dias_passados, DIAS_MAX_INCREMENTAL))
             logger.info(f"Sync incremental: {dias} dias (ultimo sync: {ultimo.strftime('%d/%m %H:%M')})")
