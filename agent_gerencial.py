@@ -538,8 +538,10 @@ def sincronizar(dias_vendas: int = 180):
                     filial_id=FILIAL_ID,
                 )
                 receb = []
+                ids_com_fornecedor = set()
                 for r in receb_raw:
                     d = r.data_emissao
+                    forn = str(r.fornecedor or "").strip()
                     receb.append({
                         "cd_compras":      int(r.cd_compras or 0),
                         "numero_nf":       str(r.numero_nf or ""),
@@ -550,8 +552,51 @@ def sincronizar(dias_vendas: int = 180):
                         "principio_ativo": str(r.principio_ativo or ""),
                         "quantidade":      int(r.quantidade or 0),
                         "valor_total":     float(r.valor_total or 0),
-                        "fornecedor":      str(r.fornecedor or ""),
+                        "fornecedor":      forn,
                     })
+                    if forn:
+                        ids_com_fornecedor.add(int(r.id_produto or 0))
+
+                # Passe extra: produtos com estoque >= 1 sem fornecedor nos 180 dias
+                # busca ate 730 dias atras no Farmasoft
+                try:
+                    _plist = locals().get("produtos") or []
+                    ids_com_estoque = {
+                        int(p["id_produto"])
+                        for p in _plist
+                        if float(p.get("estoque_atual") or 0) >= 1
+                    }
+                    ids_sem_forn = ids_com_estoque - ids_com_fornecedor
+                    if ids_sem_forn:
+                        logger.info(f"Recebimentos extra: {len(ids_sem_forn)} produtos com estoque sem fornecedor, buscando ate 730 dias...")
+                        data_inicio_730d = hoje - timedelta(days=730)
+                        receb_extra_raw = reader.ler_recebimentos_periodo(
+                            data_inicio=data_inicio_730d,
+                            data_fim=data_inicio_180d,
+                            filial_id=FILIAL_ID,
+                            produtos_ids=list(ids_sem_forn),
+                        )
+                        extra_com_forn = [
+                            {
+                                "cd_compras":      int(r.cd_compras or 0),
+                                "numero_nf":       str(r.numero_nf or ""),
+                                "data_emissao":    str(r.data_emissao)[:10] if r.data_emissao else None,
+                                "id_produto":      int(r.id_produto or 0),
+                                "descricao":       str(r.descricao or ""),
+                                "laboratorio":     str(r.laboratorio or ""),
+                                "principio_ativo": str(r.principio_ativo or ""),
+                                "quantidade":      int(r.quantidade or 0),
+                                "valor_total":     float(r.valor_total or 0),
+                                "fornecedor":      str(r.fornecedor or "").strip(),
+                            }
+                            for r in receb_extra_raw
+                            if str(r.fornecedor or "").strip()
+                        ]
+                        receb.extend(extra_com_forn)
+                        logger.info(f"Recebimentos extra: {len(extra_com_forn)} itens com fornecedor adicionados")
+                except Exception as e:
+                    logger.warning(f"Recebimentos extra (730d) erro: {e}")
+
                 # Envia em lotes de 500 (servidor faz UPSERT puro, sem DELETE)
                 LOTE = 500
                 total_enviados = 0
