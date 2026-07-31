@@ -25,6 +25,7 @@ class FarmasoftConfig:
     user: str = "SYSDBA"
     password: str = ""
     charset: str = "WIN1252"
+    fb_library_name: str = ""
 
     @classmethod
     def from_env(cls) -> "FarmasoftConfig":
@@ -35,6 +36,7 @@ class FarmasoftConfig:
             user=os.getenv("FARMASOFT_USER", "SYSDBA"),
             password=os.getenv("FARMASOFT_PASSWORD", ""),
             charset=os.getenv("FARMASOFT_CHARSET", "WIN1252"),
+            fb_library_name=os.getenv("FARMASOFT_FB_LIBRARY", ""),
         )
 
 

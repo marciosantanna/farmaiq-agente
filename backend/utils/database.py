@@ -40,7 +40,7 @@ class FarmasoftConnection:
     def conectar(self) -> bool:
         """Conecta ao banco Firebird"""
         try:
-            self.conn = fdb.connect(
+            kwargs = dict(
                 host=self.config.host,
                 port=self.config.port,
                 database=self.config.database,
@@ -48,6 +48,9 @@ class FarmasoftConnection:
                 password=self.config.password,
                 charset=self.config.charset,
             )
+            if self.config.fb_library_name:
+                kwargs["fb_library_name"] = self.config.fb_library_name
+            self.conn = fdb.connect(**kwargs)
             logger.info(f"Conectado ao Farmasoft: {self.config.host}")
             return True
         except Exception as e:
