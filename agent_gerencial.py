@@ -406,13 +406,16 @@ def sincronizar(dias_vendas: int = 180):
                     for s in saidas_venc_raw
                 ]
                 if saidas_venc:
-                    if not post("/api/sync/saidas-validade", {
+                    if post("/api/sync/saidas-validade", {
                         "filial_id": FILIAL_ID,
                         "data_inicio": str(data_inicio_vendas),
                         "saidas": saidas_venc,
                     }):
+                        logger.info(f"Saidas validade enviadas: {len(saidas_venc)}")
+                    else:
                         erros += 1
-                logger.info(f"Saidas validade enviadas: {len(saidas_venc)}")
+                else:
+                    logger.info("Saidas validade enviadas: 0")
             except Exception as e:
                 logger.error(f"Erro ao ler saidas validade: {e}")
 
