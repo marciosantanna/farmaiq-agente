@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 CLOUD_URL   = os.getenv("CLOUD_API_URL", "")
 AGENT_KEY   = os.getenv("AGENT_API_KEY", "")
 FILIAL_ID   = int(os.getenv("FILIAL_ID", "1"))
+EMPRESA_ID  = int(os.getenv("EMPRESA_ID", "1"))
 VERSAO      = "1.0.0"
 TIMEOUT_HTTP = 180
 INTERVALO   = int(os.getenv("AGENT_INTERVALO_MIN", "15")) * 60
@@ -254,7 +255,7 @@ def sincronizar(dias_vendas: int = 180):
 
     # Notificar cloud que sync iniciou
     post("/api/sync/status", {
-        "filial_id": FILIAL_ID,
+        "empresa_id": EMPRESA_ID, "filial_id": FILIAL_ID,
         "em_curso": True,
         "versao_agent": VERSAO,
     })
@@ -295,7 +296,7 @@ def sincronizar(dias_vendas: int = 180):
                     _ping_api()  # acorda Render apos leitura longa do Farmasoft
                     for i in range(0, total_prod, LOTE_P):
                         if not post("/api/sync/produtos", {
-                            "filial_id": FILIAL_ID,
+                            "empresa_id": EMPRESA_ID, "filial_id": FILIAL_ID,
                             "produtos": produtos[i:i+LOTE_P],
                         }):
                             ok_prod = False
@@ -304,7 +305,7 @@ def sincronizar(dias_vendas: int = 180):
                         # Cleanup: remove inativos apos todos os lotes enviados
                         ids_ativos = [p["id_produto"] for p in produtos]
                         post("/api/sync/produtos/cleanup", {
-                            "filial_id": FILIAL_ID,
+                            "empresa_id": EMPRESA_ID, "filial_id": FILIAL_ID,
                             "ids_ativos": ids_ativos,
                         })
                         logger.info(f"Produtos enviados: {total_prod}")
@@ -331,7 +332,7 @@ def sincronizar(dias_vendas: int = 180):
                     ok_estoq = True
                     for i in range(0, len(itens_estoq), LOTE_E):
                         if not post("/api/sync/estoque", {
-                            "filial_id": FILIAL_ID,
+                            "empresa_id": EMPRESA_ID, "filial_id": FILIAL_ID,
                             "itens": itens_estoq[i:i+LOTE_E],
                         }):
                             ok_estoq = False
@@ -373,7 +374,7 @@ def sincronizar(dias_vendas: int = 180):
                 for i in range(0, len(vendas), LOTE):
                     lote = vendas[i:i+LOTE]
                     if not post("/api/sync/vendas", {
-                        "filial_id": FILIAL_ID,
+                        "empresa_id": EMPRESA_ID, "filial_id": FILIAL_ID,
                         "data_inicio": str(data_inicio_vendas),
                         "lote": i // LOTE,
                         "total_lotes": (len(vendas) + LOTE - 1) // LOTE,
@@ -407,7 +408,7 @@ def sincronizar(dias_vendas: int = 180):
                 ]
                 if saidas_venc:
                     if post("/api/sync/saidas-validade", {
-                        "filial_id": FILIAL_ID,
+                        "empresa_id": EMPRESA_ID, "filial_id": FILIAL_ID,
                         "data_inicio": str(data_inicio_vendas),
                         "saidas": saidas_venc,
                     }):
@@ -443,7 +444,7 @@ def sincronizar(dias_vendas: int = 180):
                 LOTE_B = 500
                 for i in range(0, len(balconistas), LOTE_B):
                     if not post("/api/sync/balconistas", {
-                        "filial_id": FILIAL_ID,
+                        "empresa_id": EMPRESA_ID, "filial_id": FILIAL_ID,
                         "data_inicio": str(data_inicio_vendas),
                         "lote": i // LOTE_B,
                         "balconistas": balconistas[i:i+LOTE_B],
@@ -472,7 +473,7 @@ def sincronizar(dias_vendas: int = 180):
                         "cd_grupo":    int(c.get("cd_grupo") or c.get("CD_GRUPO") or 0),
                         "valor_total": float(c.get("valor_total") or c.get("VALOR_TOTAL") or 0),
                     })
-                if not post("/api/sync/compras", {"filial_id": FILIAL_ID, "compras": compras}):
+                if not post("/api/sync/compras", {"empresa_id": EMPRESA_ID, "filial_id": FILIAL_ID, "compras": compras}):
                     erros += 1
                 else:
                     logger.info(f"Compras enviadas: {len(compras)}")
@@ -524,7 +525,7 @@ def sincronizar(dias_vendas: int = 180):
                         "sentido":              sentido,
                         "status_transfer":      str(t.get("status_transfer") or ""),
                     })
-                if not post("/api/sync/transferencias", {"filial_id": FILIAL_ID, "transferencias": transf}):
+                if not post("/api/sync/transferencias", {"empresa_id": EMPRESA_ID, "filial_id": FILIAL_ID, "transferencias": transf}):
                     erros += 1
                 else:
                     logger.info(f"Transferencias enviadas: {len(transf)}")
@@ -611,7 +612,7 @@ def sincronizar(dias_vendas: int = 180):
                         break
                     lote_idx = i // LOTE
                     if not post("/api/sync/recebimentos", {
-                        "filial_id": FILIAL_ID,
+                        "empresa_id": EMPRESA_ID, "filial_id": FILIAL_ID,
                         "recebimentos": lote,
                         "lote_idx": lote_idx,
                         "total_lotes": total_lotes,
@@ -636,7 +637,7 @@ def sincronizar(dias_vendas: int = 180):
                     data_inicio=DATA_INICIO_BOLETOS,
                     filial_id=FILIAL_ID,
                 )
-                if not post("/api/sync/contas-pagar", {"filial_id": FILIAL_ID, "contas": cp_raw}):
+                if not post("/api/sync/contas-pagar", {"empresa_id": EMPRESA_ID, "filial_id": FILIAL_ID, "contas": cp_raw}):
                     erros += 1
                 else:
                     logger.info(f"Contas a pagar enviadas: {len(cp_raw)}")
@@ -647,7 +648,7 @@ def sincronizar(dias_vendas: int = 180):
     except Exception as e:
         logger.error(f"Erro de conexao Farmasoft: {e}")
         post("/api/sync/status", {
-            "filial_id": FILIAL_ID,
+            "empresa_id": EMPRESA_ID, "filial_id": FILIAL_ID,
             "em_curso": False,
             "erro": str(e),
             "versao_agent": VERSAO,
@@ -656,7 +657,7 @@ def sincronizar(dias_vendas: int = 180):
 
     # Notificar cloud que sync concluiu
     post("/api/sync/status", {
-        "filial_id": FILIAL_ID,
+        "empresa_id": EMPRESA_ID, "filial_id": FILIAL_ID,
         "em_curso": False,
         "erro": f"{erros} erros" if erros else None,
         "versao_agent": VERSAO,
@@ -794,7 +795,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
             try:
                 produtos = _buscar_produtos_farmasoft(termo)
                 self._responder_json(200, {
-                    "filial_id": FILIAL_ID,
+                    "empresa_id": EMPRESA_ID, "filial_id": FILIAL_ID,
                     "fonte": "farmasoft_realtime",
                     "total": len(produtos),
                     "produtos": produtos,
