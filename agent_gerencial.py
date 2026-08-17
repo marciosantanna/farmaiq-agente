@@ -671,7 +671,7 @@ def sincronizar(dias_vendas: int = 180):
 
     # Verificar se meta bonus do dia foi batida (envia alerta uma vez por dia)
     try:
-        url = f"{CLOUD_URL.rstrip('/')}/api/telegram/verificar-alerta-bonus?filial_id={FILIAL_ID}"
+        url = f"{CLOUD_URL.rstrip('/')}/api/telegram/verificar-alerta-bonus?filial_id={FILIAL_ID}&empresa_id={EMPRESA_ID}"
         r = requests.post(url, headers=headers(), timeout=30)
         if r.status_code == 200:
             status = r.json().get("status", "")
@@ -684,7 +684,7 @@ def sincronizar(dias_vendas: int = 180):
 
     # Verificar se meta mensal atingiu 90% ou 100% (envia alerta uma vez por gatilho/mes)
     try:
-        url = f"{CLOUD_URL.rstrip('/')}/api/telegram/verificar-alerta-meta-mensal?filial_id={FILIAL_ID}"
+        url = f"{CLOUD_URL.rstrip('/')}/api/telegram/verificar-alerta-meta-mensal?filial_id={FILIAL_ID}&empresa_id={EMPRESA_ID}"
         r = requests.post(url, headers=headers(), timeout=30)
         if r.status_code == 200:
             status = r.json().get("status", "")
@@ -987,7 +987,7 @@ def _verificar_relatorio_agendado():
         h_conf = datetime.strptime(horario, "%H:%M")
         h_agora = datetime.strptime(agora, "%H:%M")
         if h_agora >= h_conf:
-            url2 = f"{CLOUD_URL.rstrip('/')}/api/telegram/enviar-relatorio-gerente?filial_id={FILIAL_ID}"
+            url2 = f"{CLOUD_URL.rstrip('/')}/api/telegram/enviar-relatorio-gerente?filial_id={FILIAL_ID}&empresa_id={EMPRESA_ID}"
             r2 = requests.post(url2, headers=headers(), timeout=60)
             if r2.status_code == 200:
                 _relatorio_enviado_hoje = hoje
