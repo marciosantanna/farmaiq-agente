@@ -707,6 +707,22 @@ WEBHOOK_PORT = int(os.getenv("AGENT_WEBHOOK_PORT", "5001"))
 _sync_lock = threading.Lock()
 
 
+def _recomputar_cache_cloud():
+    """Solicita ao backend que recompute os endpoints pesados apos o sync."""
+    if not CLOUD_URL or not AGENT_KEY:
+        return
+    try:
+        url = f"{CLOUD_URL.rstrip('/')}/api/cache/recomputar?filial_id={FILIAL_ID}&empresa_id={EMPRESA_ID}"
+        r = requests.post(url, headers=headers(), timeout=TIMEOUT_HTTP)
+        if r.status_code == 200:
+            data = r.json()
+            logger.info(f"[cache/recomputar] ok={data.get('ok')} resultados={data.get('resultados')} erros={data.get('erros')}")
+        else:
+            logger.warning(f"[cache/recomputar] status={r.status_code}")
+    except Exception as e:
+        logger.warning(f"[cache/recomputar] erro: {e}")
+
+
 def _fazer_sync_thread(dias):
     """Executa sync em thread separada (nao bloqueia o webhook)."""
     if _sync_lock.locked():
@@ -714,6 +730,7 @@ def _fazer_sync_thread(dias):
         return
     with _sync_lock:
         sincronizar(dias_vendas=dias)
+    _recomputar_cache_cloud()
 
 
 def _buscar_produtos_farmasoft(termo: str) -> list:
@@ -963,6 +980,7 @@ def main():
         while True:
             dias = args.dias if args.dias else calcular_dias_sync()
             sincronizar(dias_vendas=dias)
+            _recomputar_cache_cloud()
             _verificar_relatorio_agendado()
             _verificar_alerta_boletos()
             logger.info(f"Aguardando {INTERVALO//60} minutos...")
