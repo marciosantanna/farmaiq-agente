@@ -941,6 +941,9 @@ def main():
     if args.webhook:
         logger.info(f"Webhook ativo na porta {WEBHOOK_PORT} | POST /sync?key=***")
         threading.Thread(target=_loop_background, args=(args.dias,), daemon=True).start()
+        if CLOUD_URL:
+            threading.Thread(target=_loop_keepalive, daemon=True).start()
+            logger.info("Keepalive Render ativo (ping a cada 10min)")
         if DUCKDNS_DOMAIN and DUCKDNS_TOKEN:
             _atualizar_duckdns()
             threading.Thread(target=_loop_duckdns, daemon=True).start()
@@ -954,6 +957,9 @@ def main():
 
     elif args.loop:
         logger.info(f"Modo loop: sincronizando a cada {INTERVALO//60} minutos")
+        if CLOUD_URL:
+            threading.Thread(target=_loop_keepalive, daemon=True).start()
+            logger.info("Keepalive Render ativo (ping a cada 10min)")
         while True:
             dias = args.dias if args.dias else calcular_dias_sync()
             sincronizar(dias_vendas=dias)
@@ -1027,6 +1033,21 @@ def _verificar_alerta_boletos():
             logger.warning(f"Erro alerta boletos: {r.status_code}")
     except Exception as e:
         logger.warning(f"Erro verificar alerta boletos: {e}")
+
+
+def _loop_keepalive():
+    """Pinga a API a cada 10 minutos para evitar cold start do Render (dorme apos 15min)."""
+    import time as _time
+    _time.sleep(60)  # aguarda o primeiro sync iniciar
+    while True:
+        try:
+            import requests as _req
+            url = f"{CLOUD_URL.rstrip('/')}/health"
+            _req.get(url, timeout=10)
+            logger.debug("keepalive ok")
+        except Exception:
+            pass
+        _time.sleep(600)  # 10 minutos
 
 
 def _loop_background(dias_fixo):
