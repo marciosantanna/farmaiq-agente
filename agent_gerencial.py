@@ -290,9 +290,10 @@ def sincronizar(dias_vendas: int = 180):
                             "ean":             str(p.get("ean") or p.get("EAN") or ""),
                             "ean2":            str(p.get("ean2") or p.get("EAN2") or ""),
                         })
-                    LOTE_P = 200
+                    LOTE_P = 500
                     ok_prod = True
                     total_prod = len(produtos)
+                    ts_antes = datetime.utcnow().isoformat()  # registra antes de enviar
                     _ping_api()  # acorda Render apos leitura longa do Farmasoft
                     for i in range(0, total_prod, LOTE_P):
                         if not post("/api/sync/produtos", {
@@ -302,11 +303,11 @@ def sincronizar(dias_vendas: int = 180):
                             ok_prod = False
                             erros += 1
                     if ok_prod:
-                        # Cleanup: remove inativos apos todos os lotes enviados
-                        ids_ativos = [p["id_produto"] for p in produtos]
+                        # Cleanup por timestamp: rapido, sem enviar array de IDs
                         post("/api/sync/produtos/cleanup", {
                             "empresa_id": EMPRESA_ID, "filial_id": FILIAL_ID,
-                            "ids_ativos": ids_ativos,
+                            "antes_de": ts_antes,
+                            "total_ativos": total_prod,
                         })
                         logger.info(f"Produtos enviados: {total_prod}")
                 except Exception as e:
@@ -369,8 +370,8 @@ def sincronizar(dias_vendas: int = 180):
                         "valor_total":     float(v.get("valor_total") or v.get("VALOR_TOTAL") or 0),
                         "custo_total":     float(v.get("custo_total") or v.get("CUSTO_TOTAL") or 0),
                     })
-                # Enviar em lotes de 200 para nao estourar o HTTP
-                LOTE = 200
+                # Enviar em lotes de 500
+                LOTE = 500
                 for i in range(0, len(vendas), LOTE):
                     lote = vendas[i:i+LOTE]
                     if not post("/api/sync/vendas", {
