@@ -51,6 +51,7 @@ CLOUD_URL   = os.getenv("CLOUD_API_URL", "")
 AGENT_KEY   = os.getenv("AGENT_API_KEY", "")
 FILIAL_ID   = int(os.getenv("FILIAL_ID", "1"))
 EMPRESA_ID  = int(os.getenv("EMPRESA_ID", "1"))
+AGENT_TOKEN = os.getenv("AGENT_TOKEN", "")   # token por filial; vazio = usa AGENT_KEY global
 VERSAO      = "1.0.0"
 TIMEOUT_HTTP = 180
 INTERVALO   = int(os.getenv("AGENT_INTERVALO_MIN", "15")) * 60
@@ -183,15 +184,20 @@ def deve_sincronizar_produtos() -> bool:
 
 
 def headers():
-    return {
+    h = {
         "X-Agent-Key": AGENT_KEY,
         "Content-Type": "application/json",
     }
+    if AGENT_TOKEN:
+        h["X-Agent-Token"] = AGENT_TOKEN
+    return h
 
 
 def post(endpoint: str, payload: dict, tentativas: int = 3) -> bool:
     url = f"{CLOUD_URL.rstrip('/')}{endpoint}"
     payload["agent_key"] = AGENT_KEY
+    if AGENT_TOKEN:
+        payload["agente_token"] = AGENT_TOKEN
     for tentativa in range(1, tentativas + 1):
         try:
             r = requests.post(url, json=payload, headers=headers(), timeout=TIMEOUT_HTTP)
