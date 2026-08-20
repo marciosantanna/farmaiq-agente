@@ -238,8 +238,8 @@ def sincronizar(dias_vendas: int = 180):
         logger.error("CLOUD_API_URL nao configurado no .env")
         return False
 
-    if not AGENT_KEY:
-        logger.error("AGENT_API_KEY nao configurado no .env")
+    if not AGENT_KEY and not AGENT_TOKEN:
+        logger.error("Credencial nao configurada: defina AGENT_TOKEN (Admin > Agente > Gerar Token) ou AGENT_API_KEY no .env")
         return False
 
     try:
