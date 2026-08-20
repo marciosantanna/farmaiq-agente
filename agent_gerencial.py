@@ -184,12 +184,10 @@ def deve_sincronizar_produtos() -> bool:
 
 
 def headers():
-    h = {
-        "X-Agent-Key": AGENT_KEY,
-        "Content-Type": "application/json",
-    }
-    if AGENT_TOKEN:
-        h["X-Agent-Token"] = AGENT_TOKEN
+    h = {"Content-Type": "application/json"}
+    # Se ha token por filial usa ele como credencial primaria
+    # Caso contrario usa a chave global (retrocompatibilidade)
+    h["X-Agent-Key"] = AGENT_TOKEN if AGENT_TOKEN else AGENT_KEY
     return h
 
 
