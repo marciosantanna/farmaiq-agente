@@ -306,14 +306,18 @@ def sincronizar(dias_vendas: int = 180):
                         }):
                             ok_prod = False
                             erros += 1
-                    if ok_prod:
+                    if ok_prod and total_prod > 0:
                         # Cleanup por timestamp: rapido, sem enviar array de IDs
+                        # Guarda: nao roda cleanup se total_prod=0 (evita apagar tudo
+                        # quando ler_estoque_produtos retorna vazio por erro no Farmasoft)
                         post("/api/sync/produtos/cleanup", {
                             "empresa_id": EMPRESA_ID, "filial_id": FILIAL_ID,
                             "antes_de": ts_antes,
                             "total_ativos": total_prod,
                         })
                         logger.info(f"Produtos enviados: {total_prod}")
+                    elif ok_prod and total_prod == 0:
+                        logger.warning("ler_estoque_produtos retornou 0 produtos - cleanup ignorado para nao apagar dados existentes")
                 except Exception as e:
                     logger.error(f"Erro ao ler produtos: {e}")
                     erros += 1
