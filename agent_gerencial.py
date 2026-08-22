@@ -717,7 +717,7 @@ _sync_lock = threading.Lock()
 
 def _recomputar_cache_cloud():
     """Solicita ao backend que recompute os endpoints pesados apos o sync."""
-    if not CLOUD_URL or not AGENT_KEY:
+    if not CLOUD_URL or (not AGENT_KEY and not AGENT_TOKEN):
         return
     try:
         url = f"{CLOUD_URL.rstrip('/')}/api/cache/recomputar?filial_id={FILIAL_ID}&empresa_id={EMPRESA_ID}"
@@ -922,8 +922,8 @@ def main():
             sys.exit(0)
 
         # Fallback: chama via API HTTP
-        if not CLOUD_URL or not AGENT_KEY:
-            logger.error("Configure DATABASE_URL ou CLOUD_API_URL+AGENT_API_KEY no .env")
+        if not CLOUD_URL or (not AGENT_KEY and not AGENT_TOKEN):
+            logger.error("Configure DATABASE_URL ou CLOUD_API_URL+AGENT_API_KEY (ou AGENT_TOKEN) no .env")
             sys.exit(1)
         base = CLOUD_URL.rstrip('/')
         logger.info("Acordando servidor Render (pode levar ~60s)...")
