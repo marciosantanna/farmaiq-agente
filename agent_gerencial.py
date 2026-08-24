@@ -297,7 +297,7 @@ def sincronizar(dias_vendas: int = 180):
                     LOTE_P = 500
                     ok_prod = True
                     total_prod = len(produtos)
-                    ts_antes = datetime.utcnow().isoformat()  # registra antes de enviar
+                    ids_ativos = [p["id_produto"] for p in produtos]
                     _ping_api()  # acorda Render apos leitura longa do Farmasoft
                     for i in range(0, total_prod, LOTE_P):
                         if not post("/api/sync/produtos", {
@@ -307,12 +307,12 @@ def sincronizar(dias_vendas: int = 180):
                             ok_prod = False
                             erros += 1
                     if ok_prod and total_prod > 0:
-                        # Cleanup por timestamp: rapido, sem enviar array de IDs
-                        # Guarda: nao roda cleanup se total_prod=0 (evita apagar tudo
-                        # quando ler_estoque_produtos retorna vazio por erro no Farmasoft)
+                        # Cleanup por lista de IDs ativos (nao depende de relogio)
+                        # Evita que diferenca de fuso/skew entre agente e servidor
+                        # apague linhas recem-enviadas (problema do modo antes_de)
                         post("/api/sync/produtos/cleanup", {
                             "empresa_id": EMPRESA_ID, "filial_id": FILIAL_ID,
-                            "antes_de": ts_antes,
+                            "ids_ativos": ids_ativos,
                             "total_ativos": total_prod,
                         })
                         logger.info(f"Produtos enviados: {total_prod}")
