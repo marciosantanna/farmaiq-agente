@@ -986,6 +986,8 @@ def main():
             threading.Thread(target=_loop_keepalive, daemon=True).start()
             logger.info("Keepalive Render ativo (ping a cada 10min)")
         while True:
+            if _pausa_noturna():
+                continue
             dias = args.dias if args.dias else calcular_dias_sync()
             sincronizar(dias_vendas=dias)
             _recomputar_cache_cloud()
@@ -1076,9 +1078,27 @@ def _loop_keepalive():
         _time.sleep(600)  # 10 minutos
 
 
+def _pausa_noturna():
+    """
+    Retorna True se o horario atual esta na janela de pausa (0h-5h).
+    Quando em pausa, dorme ate as 05:00 e retorna True para o chamador pular o ciclo.
+    """
+    import datetime as _dt
+    agora = _dt.datetime.now()
+    if 0 <= agora.hour < 5:
+        acordar = agora.replace(hour=5, minute=0, second=0, microsecond=0)
+        segundos = (acordar - agora).total_seconds()
+        logger.info(f"Pausa noturna ativa (0h-5h). Dormindo {int(segundos//60)} min ate 05:00...")
+        time.sleep(segundos)
+        return True
+    return False
+
+
 def _loop_background(dias_fixo):
     """Loop de sync automatico rodando em background junto com o webhook."""
     while True:
+        if _pausa_noturna():
+            continue
         dias = dias_fixo if dias_fixo else calcular_dias_sync()
         _fazer_sync_thread(dias)
         _verificar_relatorio_agendado()
