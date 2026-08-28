@@ -55,6 +55,7 @@ AGENT_TOKEN = os.getenv("AGENT_TOKEN", "")   # token por filial; vazio = usa AGE
 VERSAO      = "1.0.0"
 TIMEOUT_HTTP = 180
 INTERVALO   = int(os.getenv("AGENT_INTERVALO_MIN", "15")) * 60
+RECOMPUTE_INTERVALO = int(os.getenv("AGENT_RECOMPUTE_INTERVALO_MIN", "60")) * 60
 
 DUCKDNS_DOMAIN   = os.getenv("DUCKDNS_DOMAIN", "")
 DUCKDNS_TOKEN    = os.getenv("DUCKDNS_TOKEN", "")
@@ -714,14 +715,29 @@ WEBHOOK_PORT = int(os.getenv("AGENT_WEBHOOK_PORT", "5001"))
 # flag para evitar sync simultaneo
 _sync_lock = threading.Lock()
 
+# throttle do recompute: evita rodar a cada sync (15/15min = 96x/dia)
+# quando o cache_endpoint ja tem TTL de 24h. Reduz trafego Render->Supabase
+# sem mudar o que o recompute faz quando roda (so a frequencia).
+_ultimo_recompute_ts = 0.0
 
-def _recomputar_cache_cloud():
-    """Solicita ao backend que recompute os endpoints pesados apos o sync."""
+
+def _recomputar_cache_cloud(forcar: bool = False):
+    """Solicita ao backend que recompute os endpoints pesados apos o sync.
+
+    Throttle: so executa se passou AGENT_RECOMPUTE_INTERVALO_MIN (padrao 60min)
+    desde a ultima chamada bem-sucedida, para nao recomputar 96x/dia.
+    """
+    global _ultimo_recompute_ts
     if not CLOUD_URL or (not AGENT_KEY and not AGENT_TOKEN):
+        return
+    agora = time.time()
+    if not forcar and (agora - _ultimo_recompute_ts) < RECOMPUTE_INTERVALO:
+        logger.info(f"[cache/recomputar] throttled (proximo em {int((RECOMPUTE_INTERVALO - (agora - _ultimo_recompute_ts)) // 60)}min)")
         return
     try:
         url = f"{CLOUD_URL.rstrip('/')}/api/cache/recomputar?filial_id={FILIAL_ID}&empresa_id={EMPRESA_ID}"
         r = requests.post(url, headers=headers(), timeout=TIMEOUT_HTTP)
+        _ultimo_recompute_ts = agora
         if r.status_code == 200:
             data = r.json()
             logger.info(f"[cache/recomputar] ok={data.get('ok')} resultados={data.get('resultados')} erros={data.get('erros')}")
