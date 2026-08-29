@@ -162,6 +162,34 @@ def salvar_estado_sync(incluiu_produtos: bool = False):
         logger.warning(f"Nao foi possivel salvar sync_state.json: {e}")
 
 
+def _ja_feito_hoje(chave_state: str) -> bool:
+    """Verifica no sync_state.json (em disco) se uma tarefa 'uma vez por dia' ja rodou hoje.
+
+    Usa disco em vez de variavel em memoria -- uma variavel em memoria zera toda
+    vez que o agente reinicia (deploy, queda de luz, reabrir o .bat), fazendo a
+    tarefa rodar de novo no mesmo dia.
+    """
+    try:
+        if STATE_FILE.exists():
+            state = json.loads(STATE_FILE.read_text())
+            return state.get(chave_state) == date.today().isoformat()
+    except Exception:
+        pass
+    return False
+
+
+def _marcar_feito_hoje(chave_state: str):
+    """Grava no sync_state.json que uma tarefa 'uma vez por dia' rodou hoje."""
+    try:
+        state = {}
+        if STATE_FILE.exists():
+            state = json.loads(STATE_FILE.read_text())
+        state[chave_state] = date.today().isoformat()
+        STATE_FILE.write_text(json.dumps(state))
+    except Exception as e:
+        logger.warning(f"Nao foi possivel salvar estado ({chave_state}): {e}")
+
+
 def deve_sincronizar_produtos() -> bool:
     """Produtos (metadata completa) so sincronizam uma vez por dia."""
     try:
@@ -997,6 +1025,7 @@ def main():
             _recomputar_cache_cloud()
             _verificar_relatorio_agendado()
             _verificar_alerta_boletos()
+            _verificar_limpeza_retencao()
             logger.info(f"Aguardando {INTERVALO//60} minutos...")
             time.sleep(INTERVALO)
     else:
@@ -1005,14 +1034,9 @@ def main():
         sys.exit(0 if ok else 1)
 
 
-_relatorio_enviado_hoje: str = ""
-
-
 def _verificar_relatorio_agendado():
     """Envia relatorio ao gerente se horario configurado foi atingido (uma vez por dia)."""
-    global _relatorio_enviado_hoje
-    hoje = date.today().isoformat()
-    if _relatorio_enviado_hoje == hoje:
+    if _ja_feito_hoje("relatorio_agendado_enviado"):
         return
     try:
         url = f"{CLOUD_URL.rstrip('/')}/api/loja/config?filial_id={FILIAL_ID}"
@@ -1029,7 +1053,7 @@ def _verificar_relatorio_agendado():
             url2 = f"{CLOUD_URL.rstrip('/')}/api/telegram/enviar-relatorio-gerente?filial_id={FILIAL_ID}&empresa_id={EMPRESA_ID}"
             r2 = requests.post(url2, headers=headers(), timeout=60)
             if r2.status_code == 200:
-                _relatorio_enviado_hoje = hoje
+                _marcar_feito_hoje("relatorio_agendado_enviado")
                 logger.info(f"Relatorio agendado enviado ({horario})")
             else:
                 logger.warning(f"Erro ao enviar relatorio agendado: {r2.status_code} {r2.text[:100]}")
@@ -1037,16 +1061,12 @@ def _verificar_relatorio_agendado():
         logger.warning(f"Erro verificar relatorio agendado: {e}")
 
 
-_boletos_alerta_enviado: str = ""
-
 BOLETOS_ALERTA_HORA = "08:00"
 
 
 def _verificar_alerta_boletos():
     """Envia alerta Telegram com boletos do dia, uma vez por dia as 08:00."""
-    global _boletos_alerta_enviado
-    hoje = date.today().isoformat()
-    if _boletos_alerta_enviado == hoje:
+    if _ja_feito_hoje("boletos_alerta_enviado"):
         return
     agora = datetime.now().strftime("%H:%M")
     if datetime.strptime(agora, "%H:%M") < datetime.strptime(BOLETOS_ALERTA_HORA, "%H:%M"):
@@ -1056,7 +1076,7 @@ def _verificar_alerta_boletos():
         r = requests.post(url, headers=headers(), timeout=30)
         if r.status_code == 200:
             d = r.json()
-            _boletos_alerta_enviado = hoje
+            _marcar_feito_hoje("boletos_alerta_enviado")
             if d.get("total_boletos", 0) > 0:
                 logger.info(f"Alerta boletos enviado: {d['total_boletos']} boleto(s) R$ {d.get('valor_total', 0):.2f}")
             else:
@@ -1065,6 +1085,24 @@ def _verificar_alerta_boletos():
             logger.warning(f"Erro alerta boletos: {r.status_code}")
     except Exception as e:
         logger.warning(f"Erro verificar alerta boletos: {e}")
+
+
+def _verificar_limpeza_retencao():
+    """Purga registros mortos (compras_pendentes EXPIRADO, telegram_log, chaves de
+    alerta em configuracoes) uma vez por dia. Nao roda a cada sync -- e manutencao,
+    nao invalidacao de cache."""
+    if _ja_feito_hoje("limpeza_retencao_executada"):
+        return
+    try:
+        url = f"{CLOUD_URL.rstrip('/')}/api/cache/limpeza-retencao?filial_id={FILIAL_ID}&empresa_id={EMPRESA_ID}"
+        r = requests.post(url, headers=headers(), timeout=30)
+        if r.status_code == 200:
+            _marcar_feito_hoje("limpeza_retencao_executada")
+            logger.info(f"Limpeza de retencao ok: {r.json().get('resultado')}")
+        else:
+            logger.warning(f"Erro limpeza de retencao: {r.status_code}")
+    except Exception as e:
+        logger.warning(f"Erro verificar limpeza de retencao: {e}")
 
 
 def _loop_keepalive():
@@ -1107,6 +1145,7 @@ def _loop_background(dias_fixo):
         _fazer_sync_thread(dias)
         _verificar_relatorio_agendado()
         _verificar_alerta_boletos()
+        _verificar_limpeza_retencao()
         logger.info(f"Proximo sync automatico em {INTERVALO//60} minutos")
         time.sleep(INTERVALO)
 
