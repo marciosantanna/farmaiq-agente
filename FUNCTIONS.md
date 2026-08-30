@@ -94,7 +94,7 @@ A função central do agente. **Parâmetros**: `dias_vendas` — quantos dias de
   5. Balconistas: `ler_balconistas_dia` → `POST /api/sync/balconistas` em lotes de 500
   6. Compras (90d): `ler_compras_por_nota` → `POST /api/sync/compras`
   7. Transferências (30d): `ler_transferencias` (calcula valor real corrigindo caixaria/MOQ) → `POST /api/sync/transferencias`
-  8. Recebimentos (180d): `ler_recebimentos_periodo` → `POST /api/sync/recebimentos` em lotes de 500; **passe extra**: produtos com estoque ≥1 sem fornecedor identificado nos 180d são buscados de novo até 730d atrás
+  8. Recebimentos: full (180d + passe extra até 730d pra produto com estoque sem fornecedor) só 1x/dia (`_ja_feito_hoje("recebimentos_full_180d")`); nos outros ciclos do dia janela é 7d — antes reenviava os 180d inteiros em toda sincronização (96x/dia, ~6000+ itens repetidos), corrigido 30/08/2026. `ler_recebimentos_periodo` → `POST /api/sync/recebimentos` em lotes de 500
   9. Contas a pagar (desde 01/06/2026, hardcoded): `ler_contas_pagar` → `POST /api/sync/contas-pagar`
   10. `POST /api/sync/status` (`em_curso=False`, com contagem de erros se houver)
   11. `salvar_estado_sync(incluiu_produtos=...)`

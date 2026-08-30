@@ -570,11 +570,20 @@ def sincronizar(dias_vendas: int = 180):
                 logger.error(f"Erro ao ler transferencias: {e}")
                 erros += 1
 
-            # ── 5. RECEBIMENTOS (ultimos 180 dias, em lotes de 30d) ─────────
-            logger.info("Lendo recebimentos...")
+            # ── 5. RECEBIMENTOS ──────────────────────────────────────────
+            # Full 180d (+ passe extra 730d) so 1x/dia -- reenviar isso toda
+            # sincronizacao (96x/dia) reenviava ~6000+ itens repetidos sem
+            # necessidade (achado 30/08/2026, log do Render). Nos outros ciclos
+            # do dia, janela curta (7d) cobre nota lancada com atraso no Farmasoft.
+            recebimentos_full = not _ja_feito_hoje("recebimentos_full_180d")
+            data_inicio_receb = data_inicio_180d if recebimentos_full else (hoje - timedelta(days=7))
+            logger.info(
+                "Lendo recebimentos... "
+                + ("(sync completo 180d, 1x/dia)" if recebimentos_full else "(incremental 7d)")
+            )
             try:
                 receb_raw = reader.ler_recebimentos_periodo(
-                    data_inicio=data_inicio_180d,
+                    data_inicio=data_inicio_receb,
                     data_fim=hoje,
                     filial_id=FILIAL_ID,
                 )
@@ -598,45 +607,49 @@ def sincronizar(dias_vendas: int = 180):
                     if forn:
                         ids_com_fornecedor.add(int(r.id_produto or 0))
 
-                # Passe extra: produtos com estoque >= 1 sem fornecedor nos 180 dias
-                # busca ate 730 dias atras no Farmasoft
-                try:
-                    _plist = locals().get("produtos") or []
-                    ids_com_estoque = {
-                        int(p["id_produto"])
-                        for p in _plist
-                        if float(p.get("estoque_atual") or 0) >= 1
-                    }
-                    ids_sem_forn = ids_com_estoque - ids_com_fornecedor
-                    if ids_sem_forn:
-                        logger.info(f"Recebimentos extra: {len(ids_sem_forn)} produtos com estoque sem fornecedor, buscando ate 730 dias...")
-                        data_inicio_730d = hoje - timedelta(days=730)
-                        receb_extra_raw = reader.ler_recebimentos_periodo(
-                            data_inicio=data_inicio_730d,
-                            data_fim=data_inicio_180d,
-                            filial_id=FILIAL_ID,
-                            produtos_ids=list(ids_sem_forn),
-                        )
-                        extra_com_forn = [
-                            {
-                                "cd_compras":      int(r.cd_compras or 0),
-                                "numero_nf":       str(r.numero_nf or ""),
-                                "data_emissao":    str(r.data_emissao)[:10] if r.data_emissao else None,
-                                "id_produto":      int(r.id_produto or 0),
-                                "descricao":       str(r.descricao or ""),
-                                "laboratorio":     str(r.laboratorio or ""),
-                                "principio_ativo": str(r.principio_ativo or ""),
-                                "quantidade":      int(r.quantidade or 0),
-                                "valor_total":     float(r.valor_total or 0),
-                                "fornecedor":      str(r.fornecedor or "").strip(),
-                            }
-                            for r in receb_extra_raw
-                            if str(r.fornecedor or "").strip()
-                        ]
-                        receb.extend(extra_com_forn)
-                        logger.info(f"Recebimentos extra: {len(extra_com_forn)} itens com fornecedor adicionados")
-                except Exception as e:
-                    logger.warning(f"Recebimentos extra (730d) erro: {e}")
+                # Passe extra: produtos com estoque >= 1 sem fornecedor nos 180 dias,
+                # busca ate 730 dias atras no Farmasoft. So faz sentido junto do sync
+                # completo (recebimentos_full) -- com janela curta (7d) quase todo
+                # produto pareceria "sem fornecedor" e essa consulta de 730d rodaria
+                # toda sincronizacao (96x/dia) por engano.
+                if recebimentos_full:
+                    try:
+                        _plist = locals().get("produtos") or []
+                        ids_com_estoque = {
+                            int(p["id_produto"])
+                            for p in _plist
+                            if float(p.get("estoque_atual") or 0) >= 1
+                        }
+                        ids_sem_forn = ids_com_estoque - ids_com_fornecedor
+                        if ids_sem_forn:
+                            logger.info(f"Recebimentos extra: {len(ids_sem_forn)} produtos com estoque sem fornecedor, buscando ate 730 dias...")
+                            data_inicio_730d = hoje - timedelta(days=730)
+                            receb_extra_raw = reader.ler_recebimentos_periodo(
+                                data_inicio=data_inicio_730d,
+                                data_fim=data_inicio_180d,
+                                filial_id=FILIAL_ID,
+                                produtos_ids=list(ids_sem_forn),
+                            )
+                            extra_com_forn = [
+                                {
+                                    "cd_compras":      int(r.cd_compras or 0),
+                                    "numero_nf":       str(r.numero_nf or ""),
+                                    "data_emissao":    str(r.data_emissao)[:10] if r.data_emissao else None,
+                                    "id_produto":      int(r.id_produto or 0),
+                                    "descricao":       str(r.descricao or ""),
+                                    "laboratorio":     str(r.laboratorio or ""),
+                                    "principio_ativo": str(r.principio_ativo or ""),
+                                    "quantidade":      int(r.quantidade or 0),
+                                    "valor_total":     float(r.valor_total or 0),
+                                    "fornecedor":      str(r.fornecedor or "").strip(),
+                                }
+                                for r in receb_extra_raw
+                                if str(r.fornecedor or "").strip()
+                            ]
+                            receb.extend(extra_com_forn)
+                            logger.info(f"Recebimentos extra: {len(extra_com_forn)} itens com fornecedor adicionados")
+                    except Exception as e:
+                        logger.warning(f"Recebimentos extra (730d) erro: {e}")
 
                 # Envia em lotes de 500 (servidor faz UPSERT puro, sem DELETE)
                 LOTE = 500
@@ -662,6 +675,8 @@ def sincronizar(dias_vendas: int = 180):
                     erros += 1
                 else:
                     logger.info(f"Recebimentos concluidos: {total_enviados} itens")
+                    if recebimentos_full:
+                        _marcar_feito_hoje("recebimentos_full_180d")
             except Exception as e:
                 logger.error(f"Erro ao ler recebimentos: {e}")
                 erros += 1
