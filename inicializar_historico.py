@@ -32,13 +32,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-CLOUD_URL  = os.getenv("CLOUD_API_URL", "").rstrip("/")
-AGENT_KEY  = os.getenv("AGENT_API_KEY", "")
-FILIAL_ID  = int(os.getenv("FILIAL_ID", "1"))
+CLOUD_URL   = os.getenv("CLOUD_API_URL", "").rstrip("/")
+AGENT_KEY   = os.getenv("AGENT_API_KEY", "")
+AGENT_TOKEN = os.getenv("AGENT_TOKEN", "")   # token por filial; mesmo padrao do agent_gerencial.py
+FILIAL_ID   = int(os.getenv("FILIAL_ID", "1"))
+EMPRESA_ID  = int(os.getenv("EMPRESA_ID", "1"))
 
 
 def post(endpoint: str, payload: dict) -> bool:
     payload["agent_key"] = AGENT_KEY
+    if AGENT_TOKEN:
+        payload["agente_token"] = AGENT_TOKEN
     try:
         r = requests.post(f"{CLOUD_URL}{endpoint}", json=payload, timeout=60)
         if r.status_code == 200:
@@ -83,6 +87,7 @@ def processar_mes(reader, ano: int, mes: int, sobrescrever: bool) -> bool:
         }
 
     payload = {
+        "empresa_id":             EMPRESA_ID,
         "filial_id":              FILIAL_ID,
         "ano":                    ano,
         "mes":                    mes,
@@ -120,8 +125,8 @@ def main():
     parser.add_argument("--sobrescrever",action="store_true", default=False, help="Sobrescrever se ja existir no Neon")
     args = parser.parse_args()
 
-    if not CLOUD_URL or not AGENT_KEY:
-        logger.error("CLOUD_API_URL e AGENT_API_KEY precisam estar no .env")
+    if not CLOUD_URL or not (AGENT_KEY or AGENT_TOKEN):
+        logger.error("CLOUD_API_URL e AGENT_TOKEN (ou AGENT_API_KEY) precisam estar no .env")
         sys.exit(1)
 
     hoje = date.today()
