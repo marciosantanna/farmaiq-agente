@@ -1204,6 +1204,53 @@ class FarmasoftReader:
             logger.error(f"Erro ao ler vendas por produto dia: {e}")
             return []
 
+    def ler_entregas_por_periodo(
+        self,
+        data_inicio: date,
+        data_fim: date,
+        filial_id: int = 1,
+    ) -> List[Dict]:
+        """
+        Retorna vendas com cliente identificado e endereco completo cadastrado
+        no Farmasoft -- proxy de "entrega/delivery".
+
+        Farmasoft NAO tem campo nativo de tipo de entrega (TIPO_VENDA so
+        distingue venda normal de transferencia entre filiais). O sinal
+        disponivel e indireto: venda com CD_CLIENTE > 0 (cliente identificado
+        no caixa, nao balcao anonimo) cujo cadastro tem endereco+bairro+cidade
+        preenchidos -- e o mesmo proxy usado no projeto DonaFarma (WhatsApp,
+        desativado) pra decidir se valia enviar confirmacao de entrega.
+        Numero e ESTIMADO, nao um "entrega confirmada" oficial.
+        """
+        conn = self._get_connection()
+        query = """
+            SELECT
+                v.CD_VENDA,
+                v.DATA_CAIXA as DATA_VENDA,
+                v.ID_PRODUTO,
+                p.DESCRICAO,
+                SUM(v.QUANTIDADE)   as QUANTIDADE,
+                SUM(v.PRECO_TOTAL)  as VALOR_TOTAL
+            FROM VENDAS v
+            INNER JOIN PRODUTOS p ON v.ID_PRODUTO = p.ID_PRODUTO
+            INNER JOIN CLIENTES c ON v.CD_CLIENTE = c.CD_CLIENTE
+            WHERE v.CD_FILIAL = ?
+              AND v.DATA_CAIXA BETWEEN ? AND ?
+              AND v.STATUS IN ('V', 'S')
+              AND v.CONCLUIDO = 'S'
+              AND v.CD_CLIENTE > 0
+              AND c.ENDERECO IS NOT NULL AND c.ENDERECO <> ''
+              AND c.BAIRRO   IS NOT NULL AND c.BAIRRO   <> ''
+              AND c.CIDADE   IS NOT NULL AND c.CIDADE   <> ''
+            GROUP BY v.CD_VENDA, v.DATA_CAIXA, v.ID_PRODUTO, p.DESCRICAO
+            ORDER BY v.DATA_CAIXA
+        """
+        try:
+            return conn.executar_select(query, (filial_id, data_inicio, data_fim))
+        except Exception as e:
+            logger.error(f"Erro ao ler entregas: {e}")
+            return []
+
     def ler_compras_por_nota(
         self,
         data_inicio: date,

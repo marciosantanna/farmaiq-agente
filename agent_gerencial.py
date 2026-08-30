@@ -570,6 +570,38 @@ def sincronizar(dias_vendas: int = 180):
                 logger.error(f"Erro ao ler transferencias: {e}")
                 erros += 1
 
+            # ── 4b. ENTREGAS (proxy: cliente identificado + endereco completo) ──
+            # Farmasoft nao tem campo nativo de entrega -- ver ler_entregas_por_periodo.
+            # Mesma janela incremental de vendas (nao um full-scan a cada ciclo).
+            logger.info("Lendo entregas (estimativa por endereco de cliente)...")
+            try:
+                entregas_raw = reader.ler_entregas_por_periodo(
+                    data_inicio=data_inicio_vendas,
+                    data_fim=hoje,
+                    filial_id=FILIAL_ID,
+                )
+                entregas = []
+                for e in entregas_raw:
+                    d = e.get("data_venda") or e.get("DATA_VENDA")
+                    entregas.append({
+                        "cd_venda":    int(e.get("cd_venda") or e.get("CD_VENDA") or 0),
+                        "data_venda":  str(d)[:10] if d else None,
+                        "id_produto":  int(e.get("id_produto") or e.get("ID_PRODUTO") or 0),
+                        "descricao":   str(e.get("descricao") or e.get("DESCRICAO") or ""),
+                        "quantidade":  float(e.get("quantidade") or e.get("QUANTIDADE") or 0),
+                        "valor_total": float(e.get("valor_total") or e.get("VALOR_TOTAL") or 0),
+                    })
+                if not post("/api/sync/entregas", {
+                    "empresa_id": EMPRESA_ID, "filial_id": FILIAL_ID,
+                    "entregas": entregas, "data_inicio": str(data_inicio_vendas),
+                }):
+                    erros += 1
+                else:
+                    logger.info(f"Entregas enviadas: {len(entregas)}")
+            except Exception as e:
+                logger.error(f"Erro ao ler entregas: {e}")
+                erros += 1
+
             # ── 5. RECEBIMENTOS ──────────────────────────────────────────
             # Full 180d (+ passe extra 730d) so 1x/dia -- reenviar isso toda
             # sincronizacao (96x/dia) reenviava ~6000+ itens repetidos sem
