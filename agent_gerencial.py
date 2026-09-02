@@ -492,11 +492,20 @@ def sincronizar(dias_vendas: int = 180):
                 logger.error(f"Erro ao ler balconistas: {e}")
                 erros += 1
 
-            # ── 4. COMPRAS (ultimos 90 dias) ────────────────────────────────
-            logger.info("Lendo compras...")
+            # ── 4. COMPRAS ───────────────────────────────────────────────────
+            # Full 90d so 1x/dia -- reenviar isso toda sincronizacao (96x/dia)
+            # reenviava o mesmo historico o dia inteiro sem necessidade (mesmo
+            # padrao ja aplicado em recebimentos, achado 31/08/2026). Nos outros
+            # ciclos, janela curta (7d) cobre nota lancada com atraso.
+            compras_full = not _ja_feito_hoje("compras_full_90d")
+            data_inicio_compras_ef = data_inicio_compras if compras_full else (hoje - timedelta(days=7))
+            logger.info(
+                "Lendo compras... "
+                + ("(sync completo 90d, 1x/dia)" if compras_full else "(incremental 7d)")
+            )
             try:
                 compras_raw = reader.ler_compras_por_nota(
-                    data_inicio=data_inicio_compras,
+                    data_inicio=data_inicio_compras_ef,
                     data_fim=hoje,
                     filial_id=FILIAL_ID,
                 )
@@ -510,19 +519,30 @@ def sincronizar(dias_vendas: int = 180):
                         "cd_grupo":    int(c.get("cd_grupo") or c.get("CD_GRUPO") or 0),
                         "valor_total": float(c.get("valor_total") or c.get("VALOR_TOTAL") or 0),
                     })
-                if not post("/api/sync/compras", {"empresa_id": EMPRESA_ID, "filial_id": FILIAL_ID, "compras": compras}):
+                if not post("/api/sync/compras", {
+                    "empresa_id": EMPRESA_ID, "filial_id": FILIAL_ID, "compras": compras,
+                    "data_inicio": str(data_inicio_compras_ef),
+                }):
                     erros += 1
                 else:
                     logger.info(f"Compras enviadas: {len(compras)}")
+                    if compras_full:
+                        _marcar_feito_hoje("compras_full_90d")
             except Exception as e:
                 logger.error(f"Erro ao ler compras: {e}")
                 erros += 1
 
-            # ── 4. TRANSFERENCIAS (ultimos 30 dias) ─────────────────────────
-            logger.info("Lendo transferencias...")
+            # ── 4. TRANSFERENCIAS ────────────────────────────────────────────
+            # Mesmo padrao: full 30d so 1x/dia, janela curta (7d) nos outros ciclos.
+            transf_full = not _ja_feito_hoje("transferencias_full_30d")
+            data_inicio_transf_ef = data_inicio_30d if transf_full else (hoje - timedelta(days=7))
+            logger.info(
+                "Lendo transferencias... "
+                + ("(sync completo 30d, 1x/dia)" if transf_full else "(incremental 7d)")
+            )
             try:
                 transf_raw = reader.ler_transferencias(
-                    data_inicio=data_inicio_30d,
+                    data_inicio=data_inicio_transf_ef,
                     data_fim=hoje,
                     filial_id=FILIAL_ID,
                 )
@@ -562,10 +582,15 @@ def sincronizar(dias_vendas: int = 180):
                         "sentido":              sentido,
                         "status_transfer":      str(t.get("status_transfer") or ""),
                     })
-                if not post("/api/sync/transferencias", {"empresa_id": EMPRESA_ID, "filial_id": FILIAL_ID, "transferencias": transf}):
+                if not post("/api/sync/transferencias", {
+                    "empresa_id": EMPRESA_ID, "filial_id": FILIAL_ID, "transferencias": transf,
+                    "data_inicio": str(data_inicio_transf_ef),
+                }):
                     erros += 1
                 else:
                     logger.info(f"Transferencias enviadas: {len(transf)}")
+                    if transf_full:
+                        _marcar_feito_hoje("transferencias_full_30d")
             except Exception as e:
                 logger.error(f"Erro ao ler transferencias: {e}")
                 erros += 1
