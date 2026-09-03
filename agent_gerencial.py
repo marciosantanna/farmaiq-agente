@@ -609,12 +609,14 @@ def sincronizar(dias_vendas: int = 180):
                 for e in entregas_raw:
                     d = e.get("data_venda") or e.get("DATA_VENDA")
                     entregas.append({
-                        "cd_venda":    int(e.get("cd_venda") or e.get("CD_VENDA") or 0),
-                        "data_venda":  str(d)[:10] if d else None,
-                        "id_produto":  int(e.get("id_produto") or e.get("ID_PRODUTO") or 0),
-                        "descricao":   str(e.get("descricao") or e.get("DESCRICAO") or ""),
-                        "quantidade":  float(e.get("quantidade") or e.get("QUANTIDADE") or 0),
-                        "valor_total": float(e.get("valor_total") or e.get("VALOR_TOTAL") or 0),
+                        "cd_venda":        int(e.get("cd_venda") or e.get("CD_VENDA") or 0),
+                        "data_venda":      str(d)[:10] if d else None,
+                        "id_produto":      int(e.get("id_produto") or e.get("ID_PRODUTO") or 0),
+                        "descricao":       str(e.get("descricao") or e.get("DESCRICAO") or ""),
+                        "quantidade":      float(e.get("quantidade") or e.get("QUANTIDADE") or 0),
+                        "valor_total":     float(e.get("valor_total") or e.get("VALOR_TOTAL") or 0),
+                        "cd_balconista":   int(e.get("cd_balconista") or e.get("CD_BALCONISTA") or 0),
+                        "nome_balconista": str(e.get("nome_balconista") or e.get("NOME_BALCONISTA") or ""),
                     })
                 if not post("/api/sync/entregas", {
                     "empresa_id": EMPRESA_ID, "filial_id": FILIAL_ID,

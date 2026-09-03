@@ -1229,11 +1229,14 @@ class FarmasoftReader:
                 v.DATA_CAIXA as DATA_VENDA,
                 v.ID_PRODUTO,
                 p.DESCRICAO,
+                v.CD_VENDEDOR as CD_BALCONISTA,
+                COALESCE(vd.NOME, '') as NOME_BALCONISTA,
                 SUM(v.QUANTIDADE)   as QUANTIDADE,
                 SUM(v.PRECO_TOTAL)  as VALOR_TOTAL
             FROM VENDAS v
             INNER JOIN PRODUTOS p ON v.ID_PRODUTO = p.ID_PRODUTO
             INNER JOIN CLIENTES c ON v.CD_CLIENTE = c.CD_CLIENTE
+            LEFT JOIN VENDEDORES vd ON v.CD_VENDEDOR = vd.CD_VENDEDOR
             WHERE v.CD_FILIAL = ?
               AND v.DATA_CAIXA BETWEEN ? AND ?
               AND v.STATUS IN ('V', 'S')
@@ -1242,7 +1245,8 @@ class FarmasoftReader:
               AND c.ENDERECO IS NOT NULL AND c.ENDERECO <> ''
               AND c.BAIRRO   IS NOT NULL AND c.BAIRRO   <> ''
               AND c.CIDADE   IS NOT NULL AND c.CIDADE   <> ''
-            GROUP BY v.CD_VENDA, v.DATA_CAIXA, v.ID_PRODUTO, p.DESCRICAO
+            GROUP BY v.CD_VENDA, v.DATA_CAIXA, v.ID_PRODUTO, p.DESCRICAO,
+                     v.CD_VENDEDOR, vd.NOME
             ORDER BY v.DATA_CAIXA
         """
         try:
