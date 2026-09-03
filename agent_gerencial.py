@@ -55,8 +55,6 @@ AGENT_TOKEN = os.getenv("AGENT_TOKEN", "")   # token por filial; vazio = usa AGE
 VERSAO      = "1.0.0"
 TIMEOUT_HTTP = 180
 INTERVALO   = int(os.getenv("AGENT_INTERVALO_MIN", "15")) * 60
-CHECK_RAPIDO_SEG = int(os.getenv("AGENT_CHECK_RAPIDO_SEG", "60"))  # ver _mudou_desde_ultimo_check
-SYNC_MIN_INTERVALO_SEG = int(os.getenv("AGENT_SYNC_MIN_INTERVALO_SEG", "180"))  # ver _loop_background
 
 DUCKDNS_DOMAIN   = os.getenv("DUCKDNS_DOMAIN", "")
 DUCKDNS_TOKEN    = os.getenv("DUCKDNS_TOKEN", "")
@@ -86,8 +84,8 @@ def _loop_duckdns():
 
 STATE_FILE  = Path(__file__).resolve().parent / "sync_state.json"
 DIAS_PRIMEIRA_CARGA = 180
-DIAS_MAX_INCREMENTAL = 5   # maximo de dias no sync incremental
-DIAS_MARGEM = 2            # margem de seguranca (reprocessa N dias atras)
+DIAS_MAX_INCREMENTAL = 5     # maximo de dias no sync incremental (gap grande / catch-up diario)
+DIAS_MARGEM_ROTINA = 1       # janela do ciclo normal (~15min, agente rodando continuo)
 
 
 _data_servidor_cache: date | None = None
@@ -127,7 +125,16 @@ def calcular_dias_sync() -> int:
     """
     Retorna quantos dias sincronizar:
     - Sem historico local: 180 dias (carga completa)
-    - Com historico: dias desde ultimo sync + margem (minimo 2, maximo 5)
+    - Gap desde o ultimo sync (agente ficou offline, ex: PC desligado a noite):
+      dias desde o ultimo sync + margem, capado em DIAS_MAX_INCREMENTAL --
+      recupera o que perdeu
+    - Ciclo normal (~15min, agente rodando continuo, gap < 1 dia): so
+      DIAS_MARGEM_ROTINA (hoje + ontem) -- nao precisa reler uma janela de
+      varios dias toda vez, o proximo ciclo em 15min ja cobre o que mudar.
+      1x/dia faz um catch-up mais largo (DIAS_MAX_INCREMENTAL) pra pegar
+      alguma correcao tardia lancada no Farmasoft que o ciclo apertado
+      sozinho nao cobriria (mesmo padrao ja usado pra compras/transferencias/
+      recebimentos, ver `_ja_feito_hoje`)
     """
     try:
         if STATE_FILE.exists():
@@ -140,9 +147,18 @@ def calcular_dias_sync() -> int:
                     f"- relogio local estava incorreto. Forcando recarga completa."
                 )
                 raise ValueError("sync no futuro")
-            dias_passados = (agora - ultimo).days + DIAS_MARGEM
-            dias = max(DIAS_MARGEM, min(dias_passados, DIAS_MAX_INCREMENTAL))
-            logger.info(f"Sync incremental: {dias} dias (ultimo sync: {ultimo.strftime('%d/%m %H:%M')})")
+            dias_passados = (agora - ultimo).days
+            if dias_passados == 0:
+                if not _ja_feito_hoje("vendas_catchup_amplo"):
+                    _marcar_feito_hoje("vendas_catchup_amplo")
+                    dias = DIAS_MAX_INCREMENTAL
+                    logger.info(f"Sync incremental (catch-up diario amplo): {dias} dias")
+                else:
+                    dias = DIAS_MARGEM_ROTINA
+                    logger.info(f"Sync incremental (ciclo normal): {dias} dias (ultimo sync: {ultimo.strftime('%d/%m %H:%M')})")
+            else:
+                dias = max(DIAS_MARGEM_ROTINA, min(dias_passados + DIAS_MARGEM_ROTINA, DIAS_MAX_INCREMENTAL))
+                logger.info(f"Sync incremental (gap de {dias_passados}d): {dias} dias (ultimo sync: {ultimo.strftime('%d/%m %H:%M')})")
             return dias
     except Exception:
         pass
@@ -1115,27 +1131,21 @@ def main():
             server.shutdown()
 
     elif args.loop:
-        logger.info(f"Modo loop: checagem rapida a cada {CHECK_RAPIDO_SEG}s, sync completo quando algo mudar (teto {INTERVALO//60}min)")
+        logger.info(f"Modo loop: sincronizando a cada {INTERVALO//60} minutos")
         if CLOUD_URL:
             threading.Thread(target=_loop_keepalive, daemon=True).start()
             logger.info("Keepalive Render ativo (ping a cada 10min)")
-        ultimo_sync_completo = 0.0
         while True:
             if _pausa_noturna():
                 continue
-            mudou = _mudou_desde_ultimo_check()  # sempre, a cada CHECK_RAPIDO_SEG -- barato/local
-            agora = time.time()
-            gap = agora - ultimo_sync_completo
-            precisa_sync = (gap >= SYNC_MIN_INTERVALO_SEG and mudou) or gap >= INTERVALO
-            if precisa_sync:
-                dias = args.dias if args.dias else calcular_dias_sync()
-                sincronizar(dias_vendas=dias)
-                _recomputar_cache_cloud()
-                _verificar_relatorio_agendado()
-                _verificar_alerta_boletos()
-                _verificar_limpeza_retencao()
-                ultimo_sync_completo = agora
-            time.sleep(CHECK_RAPIDO_SEG)
+            dias = args.dias if args.dias else calcular_dias_sync()
+            sincronizar(dias_vendas=dias)
+            _recomputar_cache_cloud()
+            _verificar_relatorio_agendado()
+            _verificar_alerta_boletos()
+            _verificar_limpeza_retencao()
+            logger.info(f"Aguardando {INTERVALO//60} minutos...")
+            time.sleep(INTERVALO)
     else:
         dias = args.dias if args.dias else calcular_dias_sync()
         ok = sincronizar(dias_vendas=dias)
@@ -1244,69 +1254,18 @@ def _pausa_noturna():
     return False
 
 
-_ultima_contagem_vendas = None
-
-
-def _mudou_desde_ultimo_check() -> bool:
-    """Checagem barata (so COUNT, sem trazer dado nenhum) pra saber se algo
-    novo entrou no Farmasoft desde a ultima olhada -- permite rodar o sync
-    completo (caro, o mesmo de sempre) so quando vale a pena, em vez de reenviar
-    a mesma janela de dias a cada ciclo mesmo sem nada novo. So SELECT, mesma
-    regra de leitura apenas do resto do agente.
-    """
-    global _ultima_contagem_vendas
-    try:
-        from backend.utils.database import farmasoft_connection
-        with farmasoft_connection() as conn:
-            rows = conn.executar_select(
-                "SELECT COUNT(*) AS N FROM VENDAS WHERE DATA_CAIXA = CURRENT_DATE AND CD_FILIAL = ?",
-                (FILIAL_ID,),
-            )
-        contagem = int(rows[0]["N"]) if rows else 0
-    except Exception as e:
-        logger.debug(f"[check-rapido] erro na checagem barata, sincronizando por seguranca: {e}")
-        return True  # na duvida, sincroniza -- nunca deixar de atualizar silenciosamente
-
-    mudou = contagem != _ultima_contagem_vendas
-    _ultima_contagem_vendas = contagem
-    return mudou
-
-
 def _loop_background(dias_fixo):
-    """Loop de sync automatico rodando em background junto com o webhook.
-
-    A LEITURA do Firebird (checagem barata, so COUNT) roda a cada
-    CHECK_RAPIDO_SEG (60s por padrao) -- e local, nao toca o Supabase/Render,
-    pode ser frequente sem custo de banda. O SYNC PRA NUVEM (caro -- reenvia
-    a janela de dias inteira, nao so o delta) e que fica limitado a no minimo
-    SYNC_MIN_INTERVALO_SEG (3min por padrao) entre disparos, mesmo se a
-    checagem achar mudanca em todo ciclo de 60s -- sem esse piso, um dia
-    corrido (venda a cada minuto) dispararia sync a cada 60s e reenviaria a
-    janela de ~2 dias de vendas repetidamente, aumentando trafego em vez de
-    reduzir (calcular_dias_sync nao tem granularidade de minutos). Com o piso
-    de 3min, pior caso vira ~480 syncs/dia (dia cheio, sem folga nenhuma)
-    contra os ~96/dia de antes -- e a maioria dos dias tem folga (nem todo
-    ciclo de 3min tem venda nova), entao a media fica bem abaixo disso.
-    INTERVALO (15min) continua como teto de seguranca: forca sync completo
-    mesmo sem mudanca detectada, cobrindo casos que o COUNT de vendas nao
-    pega (ex: ajuste de estoque sem venda nova).
-    """
-    ultimo_sync_completo = 0.0
+    """Loop de sync automatico rodando em background junto com o webhook."""
     while True:
         if _pausa_noturna():
             continue
-        mudou = _mudou_desde_ultimo_check()  # roda sempre, a cada CHECK_RAPIDO_SEG -- e barato/local
-        agora = time.time()
-        gap = agora - ultimo_sync_completo
-        precisa_sync = (gap >= SYNC_MIN_INTERVALO_SEG and mudou) or gap >= INTERVALO
-        if precisa_sync:
-            dias = dias_fixo if dias_fixo else calcular_dias_sync()
-            _fazer_sync_thread(dias)
-            _verificar_relatorio_agendado()
-            _verificar_alerta_boletos()
-            _verificar_limpeza_retencao()
-            ultimo_sync_completo = agora
-        time.sleep(CHECK_RAPIDO_SEG)
+        dias = dias_fixo if dias_fixo else calcular_dias_sync()
+        _fazer_sync_thread(dias)
+        _verificar_relatorio_agendado()
+        _verificar_alerta_boletos()
+        _verificar_limpeza_retencao()
+        logger.info(f"Proximo sync automatico em {INTERVALO//60} minutos")
+        time.sleep(INTERVALO)
 
 
 if __name__ == "__main__":
