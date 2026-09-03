@@ -56,6 +56,7 @@ VERSAO      = "1.0.0"
 TIMEOUT_HTTP = 180
 INTERVALO   = int(os.getenv("AGENT_INTERVALO_MIN", "15")) * 60
 CHECK_RAPIDO_SEG = int(os.getenv("AGENT_CHECK_RAPIDO_SEG", "60"))  # ver _mudou_desde_ultimo_check
+SYNC_MIN_INTERVALO_SEG = int(os.getenv("AGENT_SYNC_MIN_INTERVALO_SEG", "180"))  # ver _loop_background
 
 DUCKDNS_DOMAIN   = os.getenv("DUCKDNS_DOMAIN", "")
 DUCKDNS_TOKEN    = os.getenv("DUCKDNS_TOKEN", "")
@@ -1122,8 +1123,10 @@ def main():
         while True:
             if _pausa_noturna():
                 continue
+            mudou = _mudou_desde_ultimo_check()  # sempre, a cada CHECK_RAPIDO_SEG -- barato/local
             agora = time.time()
-            precisa_sync = _mudou_desde_ultimo_check() or (agora - ultimo_sync_completo >= INTERVALO)
+            gap = agora - ultimo_sync_completo
+            precisa_sync = (gap >= SYNC_MIN_INTERVALO_SEG and mudou) or gap >= INTERVALO
             if precisa_sync:
                 dias = args.dias if args.dias else calcular_dias_sync()
                 sincronizar(dias_vendas=dias)
@@ -1272,20 +1275,30 @@ def _mudou_desde_ultimo_check() -> bool:
 def _loop_background(dias_fixo):
     """Loop de sync automatico rodando em background junto com o webhook.
 
-    Checagem rapida (barata, so COUNT no Firebird) a cada CHECK_RAPIDO_SEG
-    (60s por padrao); so dispara o sync completo quando algo realmente mudou
-    -- leva a latencia percebida de ~15min pra ~1min sem multiplicar o
-    trafego (a maioria dos ciclos de 60s nao acha mudanca e nao sincroniza
-    nada). INTERVALO (15min) continua como teto de seguranca: forca sync
-    completo mesmo sem mudanca detectada, cobrindo casos que o COUNT de
-    vendas nao pega (ex: ajuste de estoque sem venda nova).
+    A LEITURA do Firebird (checagem barata, so COUNT) roda a cada
+    CHECK_RAPIDO_SEG (60s por padrao) -- e local, nao toca o Supabase/Render,
+    pode ser frequente sem custo de banda. O SYNC PRA NUVEM (caro -- reenvia
+    a janela de dias inteira, nao so o delta) e que fica limitado a no minimo
+    SYNC_MIN_INTERVALO_SEG (3min por padrao) entre disparos, mesmo se a
+    checagem achar mudanca em todo ciclo de 60s -- sem esse piso, um dia
+    corrido (venda a cada minuto) dispararia sync a cada 60s e reenviaria a
+    janela de ~2 dias de vendas repetidamente, aumentando trafego em vez de
+    reduzir (calcular_dias_sync nao tem granularidade de minutos). Com o piso
+    de 3min, pior caso vira ~480 syncs/dia (dia cheio, sem folga nenhuma)
+    contra os ~96/dia de antes -- e a maioria dos dias tem folga (nem todo
+    ciclo de 3min tem venda nova), entao a media fica bem abaixo disso.
+    INTERVALO (15min) continua como teto de seguranca: forca sync completo
+    mesmo sem mudanca detectada, cobrindo casos que o COUNT de vendas nao
+    pega (ex: ajuste de estoque sem venda nova).
     """
     ultimo_sync_completo = 0.0
     while True:
         if _pausa_noturna():
             continue
+        mudou = _mudou_desde_ultimo_check()  # roda sempre, a cada CHECK_RAPIDO_SEG -- e barato/local
         agora = time.time()
-        precisa_sync = _mudou_desde_ultimo_check() or (agora - ultimo_sync_completo >= INTERVALO)
+        gap = agora - ultimo_sync_completo
+        precisa_sync = (gap >= SYNC_MIN_INTERVALO_SEG and mudou) or gap >= INTERVALO
         if precisa_sync:
             dias = dias_fixo if dias_fixo else calcular_dias_sync()
             _fazer_sync_thread(dias)
