@@ -816,21 +816,47 @@ WEBHOOK_PORT = int(os.getenv("AGENT_WEBHOOK_PORT", "5001"))
 # flag para evitar sync simultaneo
 _sync_lock = threading.Lock()
 
+CACHE_RECOMPUTE_THROTTLE_SEC = 3600  # 1x/hora, nao 1x/sync (15/15min)
+
+
 def _recomputar_cache_cloud():
     """Invalida (NAO recalcula) o cache dos endpoints pesados apos o sync.
 
-    So dispara um DELETE barato no backend -- quem recalcula e persiste de
-    novo e o proximo GET real de algum gestor (cache-aside). Sem throttle:
-    a operacao e leve o bastante pra rodar em todo sync (15/15min).
+    O DELETE em si e barato, mas o efeito colateral nao e: quem paga a conta e
+    o proximo GET real de algum gestor, que recalcula do zero (cache-aside) --
+    e esse recalculo e caro (~20-60s, varias queries grandes). Invalidar em
+    todo sync (15/15min, ~40x/dia) fazia qualquer gestor que abrisse a tela
+    logo depois de um sync pagar esse recalculo, alem de multiplicar egress no
+    Supabase. TTL de 30min (max_age_sec em compras.py) ja garante que os dados
+    nunca ficam mais velhos que isso -- entao aqui so throttlamos pra 1x/hora,
+    o suficiente pra mostrar sync novo mais rapido que o TTL sem repetir o
+    recalculo caro toda vez que o agente sincroniza.
     """
     if not CLOUD_URL or (not AGENT_KEY and not AGENT_TOKEN):
         return
+    try:
+        state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+        ultimo_iso = state.get("cache_recompute_em")
+        if ultimo_iso:
+            elapsed = (datetime.now() - datetime.fromisoformat(ultimo_iso)).total_seconds()
+            if 0 <= elapsed < CACHE_RECOMPUTE_THROTTLE_SEC:
+                logger.info(f"[cache/recomputar] throttle ativo ({elapsed:.0f}s < {CACHE_RECOMPUTE_THROTTLE_SEC}s), pulando")
+                return
+    except Exception as e:
+        logger.debug(f"[cache/recomputar] erro ao checar throttle, seguindo sem throttle: {e}")
+
     try:
         url = f"{CLOUD_URL.rstrip('/')}/api/cache/recomputar?filial_id={FILIAL_ID}&empresa_id={EMPRESA_ID}"
         r = requests.post(url, headers=headers(), timeout=TIMEOUT_HTTP)
         if r.status_code == 200:
             data = r.json()
             logger.info(f"[cache/recomputar] ok={data.get('ok')} erros={data.get('erros')}")
+            try:
+                state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+                state["cache_recompute_em"] = datetime.now().isoformat()
+                STATE_FILE.write_text(json.dumps(state))
+            except Exception as e_state:
+                logger.debug(f"[cache/recomputar] erro ao gravar throttle: {e_state}")
         else:
             logger.warning(f"[cache/recomputar] status={r.status_code}")
     except Exception as e:
