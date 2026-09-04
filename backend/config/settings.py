@@ -69,24 +69,6 @@ class PostgresConfig:
 
 
 @dataclass
-class WhatsAppConfig:
-    """Configurações de integração WhatsApp (Evolution API)"""
-    api_url: str = ""
-    api_key: str = ""
-    instance: str = ""
-    ativo: bool = False
-
-    @classmethod
-    def from_env(cls) -> "WhatsAppConfig":
-        return cls(
-            api_url=os.getenv("EVOLUTION_API_URL", ""),
-            api_key=os.getenv("EVOLUTION_API_KEY", ""),
-            instance=os.getenv("EVOLUTION_INSTANCE", ""),
-            ativo=os.getenv("WHATSAPP_ATIVO", "false").lower() == "true",
-        )
-
-
-@dataclass
 class MargemConfig:
     """Configurações de análise de margem"""
     margem_critica: float = 5.0
@@ -101,7 +83,6 @@ class Settings:
     """Configurações gerais do sistema"""
     farmasoft: FarmasoftConfig = field(default_factory=FarmasoftConfig)
     postgres: PostgresConfig = field(default_factory=PostgresConfig)
-    whatsapp: WhatsAppConfig = field(default_factory=WhatsAppConfig)
     margem: MargemConfig = field(default_factory=MargemConfig)
 
     # Filial padrão (pode ser alterada dinamicamente)
@@ -137,7 +118,6 @@ class Settings:
         return cls(
             farmasoft=FarmasoftConfig.from_env(),
             postgres=PostgresConfig.from_env(),
-            whatsapp=WhatsAppConfig.from_env(),
             margem=MargemConfig(),
             filial_id=int(os.getenv("FILIAL_ID", "1")),
             debug=os.getenv("DEBUG", "false").lower() == "true",
