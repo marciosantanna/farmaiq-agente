@@ -834,21 +834,22 @@ WEBHOOK_PORT = int(os.getenv("AGENT_WEBHOOK_PORT", "5001"))
 # flag para evitar sync simultaneo
 _sync_lock = threading.Lock()
 
-CACHE_RECOMPUTE_THROTTLE_SEC = 3600  # 1x/hora, nao 1x/sync (15/15min)
+CACHE_RECOMPUTE_THROTTLE_SEC = 60  # piso de seguranca -- ver docstring
 
 
 def _recomputar_cache_cloud():
     """Invalida (NAO recalcula) o cache dos endpoints pesados apos o sync.
 
-    O DELETE em si e barato, mas o efeito colateral nao e: quem paga a conta e
-    o proximo GET real de algum gestor, que recalcula do zero (cache-aside) --
-    e esse recalculo e caro (~20-60s, varias queries grandes). Invalidar em
-    todo sync (15/15min, ~40x/dia) fazia qualquer gestor que abrisse a tela
-    logo depois de um sync pagar esse recalculo, alem de multiplicar egress no
-    Supabase. TTL de 30min (max_age_sec em compras.py) ja garante que os dados
-    nunca ficam mais velhos que isso -- entao aqui so throttlamos pra 1x/hora,
-    o suficiente pra mostrar sync novo mais rapido que o TTL sem repetir o
-    recalculo caro toda vez que o agente sincroniza.
+    Ate 12/09/2026 isso era throttlado a 1x/hora: o recalculo (cache-aside,
+    paga quem abrir o dashboard logo depois) custava ~20-60s de queries
+    pesadas contra o Supabase (Sao Paulo, longe do backend na Europa), e cada
+    invalidacao multiplicava egress la. Com o banco primario local (mesmo
+    host do backend, ver DECISIONS.md/memoria de infra), esse recalculo caro
+    caiu pra ~1-2s e nao ha mais egress a poupar -- entao aqui so mantemos um
+    piso curto (60s) contra rajadas (ex: sync manual repetido), nao mais um
+    throttle real de 1h. TTL de 30min (max_age_sec em compras.py) segue como
+    garantia de que os dados nunca ficam mais velhos que isso de qualquer
+    forma, mesmo se essa invalidacao falhar.
     """
     if not CLOUD_URL or (not AGENT_KEY and not AGENT_TOKEN):
         return
