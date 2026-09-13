@@ -268,17 +268,8 @@ def conectar_farmasoft():
     return farmasoft_connection
 
 
-def _ping_api():
-    """Acorda o banco (Neon serverless) antes da sync para evitar cold start nas queries."""
-    try:
-        requests.get(f"{CLOUD_URL.rstrip('/')}/health", timeout=15)
-    except Exception:
-        pass
-
-
 def sincronizar(dias_vendas: int = 180):
     logger.info(f"Iniciando sync | filial={FILIAL_ID} | dias={dias_vendas}")
-    _ping_api()
 
     if not CLOUD_URL:
         logger.error("CLOUD_API_URL nao configurado no .env")
@@ -344,7 +335,6 @@ def sincronizar(dias_vendas: int = 180):
                     ok_prod = True
                     total_prod = len(produtos)
                     ids_ativos = [p["id_produto"] for p in produtos]
-                    _ping_api()  # acorda Render apos leitura longa do Farmasoft
                     for i in range(0, total_prod, LOTE_P):
                         if not post("/api/sync/produtos", {
                             "empresa_id": EMPRESA_ID, "filial_id": FILIAL_ID,
@@ -1117,9 +1107,6 @@ def main():
     if args.webhook:
         logger.info(f"Webhook ativo na porta {WEBHOOK_PORT} | POST /sync?key=***")
         threading.Thread(target=_loop_background, args=(args.dias,), daemon=True).start()
-        if CLOUD_URL:
-            threading.Thread(target=_loop_keepalive, daemon=True).start()
-            logger.info("Keepalive Render ativo (ping a cada 10min)")
         if DUCKDNS_DOMAIN and DUCKDNS_TOKEN:
             _atualizar_duckdns()
             threading.Thread(target=_loop_duckdns, daemon=True).start()
@@ -1133,9 +1120,6 @@ def main():
 
     elif args.loop:
         logger.info(f"Modo loop: sincronizando a cada {INTERVALO//60} minutos")
-        if CLOUD_URL:
-            threading.Thread(target=_loop_keepalive, daemon=True).start()
-            logger.info("Keepalive Render ativo (ping a cada 10min)")
         while True:
             if _pausa_noturna():
                 continue
@@ -1222,21 +1206,6 @@ def _verificar_limpeza_retencao():
             logger.warning(f"Erro limpeza de retencao: {r.status_code}")
     except Exception as e:
         logger.warning(f"Erro verificar limpeza de retencao: {e}")
-
-
-def _loop_keepalive():
-    """Pinga a API a cada 10 minutos para evitar cold start do Render (dorme apos 15min)."""
-    import time as _time
-    _time.sleep(60)  # aguarda o primeiro sync iniciar
-    while True:
-        try:
-            import requests as _req
-            url = f"{CLOUD_URL.rstrip('/')}/health"
-            _req.get(url, timeout=10)
-            logger.debug("keepalive ok")
-        except Exception:
-            pass
-        _time.sleep(600)  # 10 minutos
 
 
 def _pausa_noturna():

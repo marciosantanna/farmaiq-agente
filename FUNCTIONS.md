@@ -78,11 +78,6 @@ ver `CLAUDE.md`). "Cloud" = HTTP para a API no Render/Supabase.
 - **Parâmetros**: nenhum. **Retorno**: a própria função `farmasoft_connection` (não uma conexão!).
 - **Status**: **não é chamada em lugar nenhum do arquivo** — `sincronizar()` importa `farmasoft_connection` direto. Código morto, aparentemente um helper de uma versão anterior.
 
-#### `_ping_api()`
-- **Parâmetros**: nenhum. **Retorno**: `None`.
-- **Efeito colateral**: `GET {CLOUD_URL}/health`, engole qualquer exceção — só serve pra acordar o Render/Supabase antes de uma leitura longa.
-- **Chamada por**: `sincronizar()` (2x: no início, e de novo depois de ler produtos — leitura do Firebird pode levar minutos e deixar o Render dormir de novo nesse meio tempo).
-
 #### `sincronizar(dias_vendas: int = 180) -> bool`
 A função central do agente. **Parâmetros**: `dias_vendas` — quantos dias de vendas puxar. **Retorno**: `bool` (`True` se `erros == 0`).
 
@@ -99,7 +94,7 @@ A função central do agente. **Parâmetros**: `dias_vendas` — quantos dias de
   10. `POST /api/sync/status` (`em_curso=False`, com contagem de erros se houver)
   11. `salvar_estado_sync(incluiu_produtos=...)`
   12. `POST /api/telegram/verificar-alerta-bonus` e `POST /api/telegram/verificar-alerta-meta-mensal`
-- **Depende de**: `_ping_api`, `_data_hoje_servidor`, `deve_sincronizar_produtos`, `post`, `headers`, `salvar_estado_sync`, `FarmasoftReader`/`farmasoft_connection` (`backend.etl`/`backend.utils`).
+- **Depende de**: `_data_hoje_servidor`, `deve_sincronizar_produtos`, `post`, `headers`, `salvar_estado_sync`, `FarmasoftReader`/`farmasoft_connection` (`backend.etl`/`backend.utils`).
 - **Chamada por**: `main()` (modo default e `--loop`), `_fazer_sync_thread` (modo `--webhook`, tanto pelo loop de background quanto por trigger HTTP sob demanda).
 
 ### Cache e sync sob demanda (modo `--webhook`)
@@ -153,11 +148,6 @@ A função central do agente. **Parâmetros**: `dias_vendas` — quantos dias de
 
 ### Loops de background
 
-#### `_loop_keepalive()`
-- **Parâmetros**: nenhum. **Retorno**: nunca (`while True`).
-- **Efeito colateral**: dorme 60s, depois `GET {CLOUD_URL}/health` a cada 10min pra sempre, indefinidamente, engolindo erros — evita o Render dormir (cold start de ~90s).
-- **Chamada por**: `main()` (thread daemon, em `--loop` e `--webhook`, se `CLOUD_URL` estiver setado).
-
 #### `_pausa_noturna() -> bool`
 - **Parâmetros**: nenhum. **Retorno**: `bool` — `True` se estava (e ficou) em pausa.
 - **Efeito colateral**: se a hora atual está entre 0h-5h, **dorme (bloqueia a thread) até as 05:00** e retorna `True`; fora dessa janela, retorna `False` imediatamente sem dormir.
@@ -174,10 +164,10 @@ A função central do agente. **Parâmetros**: `dias_vendas` — quantos dias de
 #### `main()`
 - **Parâmetros**: nenhum (lê `sys.argv` via `argparse`). **Retorno**: `None` (ou `sys.exit()`).
 - **Flags**: `--loop`, `--webhook`, `--dias N`, `--reset`, `--migrate`.
-- **`--migrate`**: se `DATABASE_URL` está no `.env`, conecta direto no Postgres e roda um DDL pequeno e hardcoded — só a tabela `sync_contas_pagar` e seus índices, um subconjunto antigo/limitado, não é o `criar_tabelas_app()` real. Sem `DATABASE_URL`, cai no fallback: acorda o Render (`GET /health` até 3x) e chama `POST /api/admin/migrate` (esse sim roda `criar_tabelas_app()` completo do `backend/sync/schema.py`). Sai em seguida.
+- **`--migrate`**: se `DATABASE_URL` está no `.env`, conecta direto no Postgres e roda um DDL pequeno e hardcoded — só a tabela `sync_contas_pagar` e seus índices, um subconjunto antigo/limitado, não é o `criar_tabelas_app()` real. Sem `DATABASE_URL`, cai no fallback: `GET /health` até 3x, chama `POST /api/admin/migrate` (esse sim roda `criar_tabelas_app()` completo do `backend/sync/schema.py`). Sai em seguida.
 - **`--reset`**: apaga `STATE_FILE`; sai, a menos que combinado com `--loop`/`--webhook` (aí só afeta o próximo cálculo de `calcular_dias_sync()`).
-- **`--webhook`**: sobe `_loop_background` (thread daemon), `_loop_keepalive` (thread daemon, se `CLOUD_URL`), `_atualizar_duckdns()` + `_loop_duckdns` (thread daemon, se DuckDNS configurado); depois `HTTPServer(...).serve_forever()` bloqueando a thread principal em `WebhookHandler`.
-- **`--loop`**: sobe `_loop_keepalive` (se `CLOUD_URL`); depois `while True`: `_pausa_noturna()`, `sincronizar()`, `_recomputar_cache_cloud()`, `_verificar_relatorio_agendado()`, `_verificar_alerta_boletos()`, `_verificar_limpeza_retencao()`, dorme `INTERVALO`.
+- **`--webhook`**: sobe `_loop_background` (thread daemon), `_atualizar_duckdns()` + `_loop_duckdns` (thread daemon, se DuckDNS configurado); depois `HTTPServer(...).serve_forever()` bloqueando a thread principal em `WebhookHandler`.
+- **`--loop`**: `while True`: `_pausa_noturna()`, `sincronizar()`, `_recomputar_cache_cloud()`, `_verificar_relatorio_agendado()`, `_verificar_alerta_boletos()`, `_verificar_limpeza_retencao()`, dorme `INTERVALO`.
 - **Nenhuma flag**: `sincronizar()` único, `sys.exit(0 ou 1)`.
 
 ---
