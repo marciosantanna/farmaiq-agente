@@ -1148,6 +1148,7 @@ class FarmasoftReader:
                 COALESCE(p.{custo_campo}, p.CUSTO_UNITARIO, p.CUSTO_MEDIO, 0) as CUSTO_UNITARIO,
                 COALESCE(p.PRECO_VENDA, 0) as PRECO_VENDA
             FROM PRODUTOS p
+            WHERE p.STATUS != 'I'
             ORDER BY p.ID_PRODUTO
         """
         try:
