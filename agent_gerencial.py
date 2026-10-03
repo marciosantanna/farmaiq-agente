@@ -22,6 +22,7 @@ import time
 import logging
 import argparse
 import threading
+import subprocess
 import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import date, timedelta, datetime
@@ -1129,12 +1130,47 @@ def main():
             _verificar_relatorio_agendado()
             _verificar_alerta_boletos()
             _verificar_limpeza_retencao()
+            _verificar_auto_update()
             logger.info(f"Aguardando {INTERVALO//60} minutos...")
             time.sleep(INTERVALO)
     else:
         dias = args.dias if args.dias else calcular_dias_sync()
         ok = sincronizar(dias_vendas=dias)
         sys.exit(0 if ok else 1)
+
+
+def _verificar_auto_update():
+    """Verifica uma vez ao dia se ha nova versao no repo remoto.
+    Se houver, faz git pull e encerra com sys.exit(0) -- o NSSM reinicia
+    automaticamente com o codigo novo."""
+    if _ja_feito_hoje("auto_update_verificado"):
+        return
+    _marcar_feito_hoje("auto_update_verificado")
+    try:
+        # Detecta raiz do repo: BASE_DIR se for repo proprio (farmaiq-agente),
+        # ou BASE_DIR.parent se for o repo principal (farmaiq, desenvolvimento).
+        repo = BASE_DIR if (BASE_DIR / ".git").exists() else BASE_DIR.parent
+        subprocess.run(
+            ["git", "fetch", "origin", "master"],
+            cwd=repo, timeout=30, capture_output=True
+        )
+        local  = subprocess.check_output(["git", "rev-parse", "HEAD"],            cwd=repo).decode().strip()
+        remote = subprocess.check_output(["git", "rev-parse", "origin/master"],   cwd=repo).decode().strip()
+        if local == remote:
+            logger.info(f"[auto-update] ja na versao mais recente ({local[:8]})")
+            return
+        logger.info(f"[auto-update] nova versao detectada: {local[:8]} -> {remote[:8]}")
+        result = subprocess.run(
+            ["git", "pull", "origin", "master"],
+            cwd=repo, timeout=60, capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            logger.warning(f"[auto-update] git pull falhou: {result.stderr.strip()}")
+            return
+        logger.info("[auto-update] git pull concluido, reiniciando via NSSM...")
+        sys.exit(0)
+    except Exception as e:
+        logger.warning(f"[auto-update] erro: {e}")
 
 
 def _verificar_relatorio_agendado():
