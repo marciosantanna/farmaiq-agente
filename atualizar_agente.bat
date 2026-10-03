@@ -9,7 +9,7 @@ echo IMPORTANTE: execute como Administrador
 
 echo.
 echo [1/3] Buscando atualizacoes do repositorio...
-git -C "%~dp0.." pull origin master
+git -C "%~dp0." pull origin master
 if errorlevel 1 (
     echo ERRO: git pull falhou. Verifique conexao e permissoes.
     pause
