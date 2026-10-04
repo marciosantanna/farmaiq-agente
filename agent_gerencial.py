@@ -12,8 +12,8 @@ Uso:
 
 Endpoints do webhook:
     GET  /health              - status do agent
-    POST /sync?key=CHAVE      - dispara sync manual
-    GET  /buscar?termo=X&key=CHAVE  - busca produto em tempo real no Farmasoft
+    POST /sync                - dispara sync manual (chave em X-Agent-Key header)
+    GET  /buscar?termo=X      - busca produto em tempo real no Farmasoft (chave em X-Agent-Key header)
 """
 import os
 import sys
@@ -951,8 +951,8 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self._responder(200, "ok")
 
         elif path == "/buscar":
-            # GET /buscar?termo=X&key=AGENT_KEY
-            chave = qs.get("key", [""])[0]
+            # GET /buscar?termo=X  (chave em X-Agent-Key)
+            chave = self.headers.get("X-Agent-Key", "")
             if chave != AGENT_KEY:
                 self._responder_json(401, {"erro": "Chave invalida"})
                 return
@@ -983,7 +983,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self._responder(404, "Not found")
             return
 
-        chave = qs.get("key", [""])[0]
+        chave = self.headers.get("X-Agent-Key", "")
         if chave != AGENT_KEY:
             self._responder(401, "Chave invalida")
             return
@@ -1106,7 +1106,7 @@ def main():
             sys.exit(0)
 
     if args.webhook:
-        logger.info(f"Webhook ativo na porta {WEBHOOK_PORT} | POST /sync?key=***")
+        logger.info(f"Webhook ativo na porta {WEBHOOK_PORT} | POST /sync (X-Agent-Key header)")
         threading.Thread(target=_loop_background, args=(args.dias,), daemon=True).start()
         if DUCKDNS_DOMAIN and DUCKDNS_TOKEN:
             _atualizar_duckdns()
