@@ -240,9 +240,7 @@ def headers():
 
 def post(endpoint: str, payload: dict, tentativas: int = 3) -> bool:
     url = f"{CLOUD_URL.rstrip('/')}{endpoint}"
-    payload["agent_key"] = AGENT_KEY
-    if AGENT_TOKEN:
-        payload["agente_token"] = AGENT_TOKEN
+    # token enviado apenas no header X-Agent-Key (ver headers()), nao no corpo
     for tentativa in range(1, tentativas + 1):
         try:
             r = requests.post(url, json=payload, headers=headers(), timeout=TIMEOUT_HTTP)
