@@ -1137,6 +1137,19 @@ def main():
         sys.exit(0 if ok else 1)
 
 
+def _encontrar_repo_git(start: Path) -> Path:
+    """Sobe ate 4 niveis procurando a raiz do repo git. Retorna None se nao encontrar."""
+    current = start.resolve()
+    for _ in range(5):
+        if (current / ".git").exists():
+            return current
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return None
+
+
 def _verificar_auto_update():
     """Verifica uma vez ao dia se ha nova versao no repo remoto.
     Se houver, faz git pull e encerra com sys.exit(0) -- o NSSM reinicia
@@ -1145,15 +1158,19 @@ def _verificar_auto_update():
         return
     _marcar_feito_hoje("auto_update_verificado")
     try:
-        # Detecta raiz do repo: BASE_DIR se for repo proprio (farmaiq-agente),
-        # ou BASE_DIR.parent se for o repo principal (farmaiq, desenvolvimento).
-        repo = BASE_DIR if (BASE_DIR / ".git").exists() else BASE_DIR.parent
-        subprocess.run(
+        repo = _encontrar_repo_git(BASE_DIR)
+        if not repo:
+            logger.info("[auto-update] nao e um repo git, pulando verificacao de atualizacao")
+            return
+        fetch = subprocess.run(
             ["git", "fetch", "origin", "master"],
-            cwd=repo, timeout=30, capture_output=True
+            cwd=repo, timeout=30, capture_output=True, text=True
         )
-        local  = subprocess.check_output(["git", "rev-parse", "HEAD"],            cwd=repo).decode().strip()
-        remote = subprocess.check_output(["git", "rev-parse", "origin/master"],   cwd=repo).decode().strip()
+        if fetch.returncode != 0:
+            logger.warning(f"[auto-update] git fetch falhou: {fetch.stderr.strip()}")
+            return
+        local  = subprocess.check_output(["git", "rev-parse", "HEAD"],          cwd=repo).decode().strip()
+        remote = subprocess.check_output(["git", "rev-parse", "origin/master"], cwd=repo).decode().strip()
         if local == remote:
             logger.info(f"[auto-update] ja na versao mais recente ({local[:8]})")
             return
